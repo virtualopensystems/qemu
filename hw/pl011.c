@@ -122,6 +122,9 @@ static void pl011_set_read_trigger(pl011_state *s)
         s->read_trigger = 1;
 }
 
+static char buf[1024];
+static int pos = 0;
+
 static void pl011_write(void *opaque, target_phys_addr_t offset,
                           uint32_t value)
 {
@@ -132,8 +135,15 @@ static void pl011_write(void *opaque, target_phys_addr_t offset,
     case 0: /* UARTDR */
         /* ??? Check if transmitter is enabled.  */
         ch = value;
-        if (s->chr)
-            qemu_chr_write(s->chr, &ch, 1);
+        if (s->chr) {
+            //qemu_chr_write(s->chr, &ch, 1);
+	    buf[pos++] = ch;
+	}
+	if (pos > 25) {
+		buf[pos] = '\0';
+		printf("%s", buf);
+		pos = 0;
+	}
         s->int_level |= PL011_INT_TX;
         pl011_update(s);
         break;
