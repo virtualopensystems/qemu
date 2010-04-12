@@ -10,6 +10,7 @@
 #include "hw.h"
 #include "pc.h"
 #include "arm-misc.h"
+#include "kvm.h"
 
 /* Stub functions for hardware that doesn't exist.  */
 void pic_info(Monitor *mon)
@@ -41,6 +42,9 @@ static void arm_pic_cpu_handler(void *opaque, int irq, int level)
     default:
         hw_error("arm_pic_cpu_handler: Bad interrput line %d\n", irq);
     }
+
+    if (kvm_enabled())
+	    kvm_arch_interrupt(env, irq, level);
 }
 
 qemu_irq *arm_pic_init_cpu(CPUState *env)

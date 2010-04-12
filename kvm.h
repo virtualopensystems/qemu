@@ -105,6 +105,8 @@ int kvm_arch_init_vcpu(CPUState *env);
 
 void kvm_arch_reset_vcpu(CPUState *env);
 
+int kvm_arch_interrupt(CPUState *env, int irq, int level);
+
 struct kvm_guest_debug;
 struct kvm_debug_exit_arch;
 

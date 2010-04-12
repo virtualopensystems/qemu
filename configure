@@ -1481,6 +1481,8 @@ EOF
 	    kvm_cflags="$kvm_cflags -I$kerneldir/arch/powerpc/include"
 	elif test "$cpu" = "s390x" -a -d "$kerneldir/arch/s390/include" ; then
 	    kvm_cflags="$kvm_cflags -I$kerneldir/arch/s390/include"
+	elif test "$cpu" = "armv4l" -a -d "$kerneldir/arch/arm/include" ; then
+	    kvm_cflags="$kvm_cflags -I$kerneldir/arch/arm/include"
         elif test -d "$kerneldir/arch/$cpu/include" ; then
             kvm_cflags="$kvm_cflags -I$kerneldir/arch/$cpu/include"
       fi
@@ -2544,14 +2546,17 @@ case "$target_arch2" in
       echo "CONFIG_XEN=y" >> $config_target_mak
     fi
 esac
+echo "target_arch2: $target_arch2"
+echo "cpu: $cpu"
 case "$target_arch2" in
-  i386|x86_64|ppcemb|ppc|ppc64|s390x)
+  i386|x86_64|ppcemb|ppc|ppc64|s390x|arm)
     # Make sure the target and host cpus are compatible
     if test "$kvm" = "yes" -a "$target_softmmu" = "yes" -a \
       \( "$target_arch2" = "$cpu" -o \
       \( "$target_arch2" = "ppcemb" -a "$cpu" = "ppc" \) -o \
       \( "$target_arch2" = "ppc64"  -a "$cpu" = "ppc" \) -o \
       \( "$target_arch2" = "x86_64" -a "$cpu" = "i386"   \) -o \
+      \( "$target_arch2" = "arm"    -a "$cpu" = "armv4l"   \) -o \
       \( "$target_arch2" = "i386"   -a "$cpu" = "x86_64" \) \) ; then
       echo "CONFIG_KVM=y" >> $config_target_mak
       echo "KVM_CFLAGS=$kvm_cflags" >> $config_target_mak
