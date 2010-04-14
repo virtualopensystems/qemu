@@ -136,14 +136,18 @@ static void pl011_write(void *opaque, target_phys_addr_t offset,
         /* ??? Check if transmitter is enabled.  */
         ch = value;
         if (s->chr) {
-            //qemu_chr_write(s->chr, &ch, 1);
-	    buf[pos++] = ch;
-	}
-	if (pos > 25) {
-		buf[pos] = '\0';
-		printf("%s", buf);
-		pos = 0;
-	}
+            qemu_chr_write(s->chr, &ch, 1);
+            buf[pos++] = ch;
+        }
+        if (pos == 1024) {
+            buf[pos-1] = '\0';
+            printf("%s", buf);
+            pos = 0;
+        } else if (buf[pos-1] == '\n') {
+            buf[pos] = '\0';
+            printf("%s", buf);
+            pos = 0;
+        }
         s->int_level |= PL011_INT_TX;
         pl011_update(s);
         break;
@@ -316,6 +320,7 @@ static int pl011_init(SysBusDevice *dev, const unsigned char *id)
         qemu_chr_add_handlers(s->chr, pl011_can_receive, pl011_receive,
                               pl011_event, s);
     }
+
     register_savevm("pl011_uart", -1, 1, pl011_save, pl011_load, s);
     return 0;
 }
