@@ -30,7 +30,7 @@ int kvm_arch_init(KVMState *s, int smp_cpus)
 
 int kvm_arch_init_vcpu(CPUState *env)
 {
-//    return kvm_arch_put_registers(env, 0);
+    return 0;
 }
 
 int kvm_arch_put_registers(CPUState *env, int level)
@@ -146,11 +146,13 @@ int kvm_arch_interrupt(CPUState *env, int irq, int level)
 
 int kvm_arch_pre_run(CPUState *env, struct kvm_run *run)
 {
+    msync((void *)run, sizeof(struct kvm_run), MS_SYNC | MS_INVALIDATE);
     return 0;
 }
 
 int kvm_arch_post_run(CPUState *env, struct kvm_run *run)
 {
+    msync((void *)run, sizeof(struct kvm_run), MS_SYNC | MS_INVALIDATE);
     return 0;
 }
 
