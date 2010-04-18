@@ -49,9 +49,6 @@ typedef struct KVMSlot
     int flags;
 } KVMSlot;
 
-static struct kvm_mmio_user_buffer kvm_mmio_user_buffer;
-
-static unsigned int num_mmio_calls = 0;
 
 typedef struct kvm_dirty_log KVMDirtyLog;
 
@@ -774,8 +771,6 @@ int kvm_cpu_exec(CPUState *env)
 
     dprintf("kvm_cpu_exec()\n");
 
-    run->mmio_buffer = &kvm_mmio_user_buffer;
-
     do {
 #ifndef CONFIG_IOTHREAD
         if (env->exit_request) {
@@ -793,10 +788,6 @@ int kvm_cpu_exec(CPUState *env)
         kvm_arch_pre_run(env, run);
         qemu_mutex_unlock_iothread();
         ret = kvm_vcpu_ioctl(env, KVM_RUN, 0);
-        if (ret == 10) {
-            num_mmio_calls++;
-            ret = 0;
-        }
         qemu_mutex_lock_iothread();
         kvm_arch_post_run(env, run);
 
@@ -809,8 +800,6 @@ int kvm_cpu_exec(CPUState *env)
 
         if (ret < 0) {
             dprintf("kvm run failed %s\n", strerror(-ret));
-            printf("num_mmio_calls: %u\n", num_mmio_calls);
-            num_mmio_calls = 0;
             abort();
         }
 
@@ -828,17 +817,10 @@ int kvm_cpu_exec(CPUState *env)
             break;
         case KVM_EXIT_MMIO:
             dprintf("handle_mmio\n");
-            //num_mmio_calls++;
-            cpu_physical_memory_rw(kvm_mmio_user_buffer.phys_addr,
-                                   kvm_mmio_user_buffer.data,
-                                   kvm_mmio_user_buffer.len,
-                                   kvm_mmio_user_buffer.is_write);
-#if 0
             cpu_physical_memory_rw(run->mmio.phys_addr,
                                    run->mmio.data,
                                    run->mmio.len,
                                    run->mmio.is_write);
-#endif
             ret = 1;
             break;
         case KVM_EXIT_IRQ_WINDOW_OPEN:

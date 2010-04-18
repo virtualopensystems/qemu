@@ -146,13 +146,11 @@ int kvm_arch_interrupt(CPUState *env, int irq, int level)
 
 int kvm_arch_pre_run(CPUState *env, struct kvm_run *run)
 {
-    msync((void *)run, sizeof(struct kvm_run), MS_SYNC | MS_INVALIDATE);
     return 0;
 }
 
 int kvm_arch_post_run(CPUState *env, struct kvm_run *run)
 {
-    msync((void *)run, sizeof(struct kvm_run), MS_SYNC | MS_INVALIDATE);
     return 0;
 }
 
@@ -165,6 +163,4 @@ int kvm_arch_handle_exit(CPUState *env, struct kvm_run *run)
 
 void kvm_arch_reset_vcpu(CPUState *env)
 {
-    fprintf(stderr, "currently not supported KVM reset vcpu on ARM\n");
 }
-
