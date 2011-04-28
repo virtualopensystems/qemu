@@ -23,7 +23,11 @@
 #include "device_tree.h"
 #include "hw/arm-misc.h"
 
-int kvm_arch_init(KVMState *s, int smp_cpus)
+const KVMCapabilityInfo kvm_arch_required_capabilities[] = {
+    KVM_CAP_LAST_INFO
+};
+
+int kvm_arch_init(KVMState *s)
 {
     return 0;
 }
@@ -75,7 +79,7 @@ int kvm_arch_put_registers(CPUState *env, int level)
 int kvm_arch_get_registers(CPUState *env)
 {
     struct kvm_regs regs;
-    uint32_t ret;
+    int32_t ret;
 
     ret = kvm_vcpu_ioctl(env, KVM_GET_REGS, &regs);
     if (ret < 0)
@@ -144,14 +148,12 @@ int kvm_arch_interrupt(CPUState *env, int irq, int level)
     return 0;
 }
 
-int kvm_arch_pre_run(CPUState *env, struct kvm_run *run)
+void kvm_arch_pre_run(CPUState *env, struct kvm_run *run)
 {
-    return 0;
 }
 
-int kvm_arch_post_run(CPUState *env, struct kvm_run *run)
+void kvm_arch_post_run(CPUState *env, struct kvm_run *run)
 {
-    return 0;
 }
 
 int kvm_arch_handle_exit(CPUState *env, struct kvm_run *run)
@@ -163,4 +165,24 @@ int kvm_arch_handle_exit(CPUState *env, struct kvm_run *run)
 
 void kvm_arch_reset_vcpu(CPUState *env)
 {
+}
+
+bool kvm_arch_stop_on_emulation_error(CPUState *env)
+{
+    return true;
+}
+
+int kvm_arch_process_async_events(CPUState *env)
+{
+    return 0;
+}
+
+int kvm_arch_on_sigbus_vcpu(CPUState *env, int code, void *addr)
+{
+    return 1;
+}
+
+int kvm_arch_on_sigbus(int code, void *addr)
+{
+    return 1;
 }
