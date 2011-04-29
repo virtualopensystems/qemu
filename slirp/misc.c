@@ -119,6 +119,7 @@ fork_exec(struct socket *so, const char *ex, int do_pty)
 	char *bptr;
 	const char *curarg;
 	int c, i, ret;
+	pid_t pid;
 
 	DEBUG_CALL("fork_exec");
 	DEBUG_ARG("so = %lx", (long)so);
@@ -142,7 +143,8 @@ fork_exec(struct socket *so, const char *ex, int do_pty)
 		}
 	}
 
-	switch(fork()) {
+	pid = fork();
+	switch(pid) {
 	 case -1:
 		lprint("Error: fork failed: %s\n", strerror(errno));
 		close(s);
@@ -206,6 +208,7 @@ fork_exec(struct socket *so, const char *ex, int do_pty)
 		exit(1);
 
 	 default:
+		qemu_add_child_watch(pid);
 		if (do_pty == 2) {
 			close(s);
 			so->s = master;
@@ -263,48 +266,6 @@ void lprint(const char *format, ...)
     monitor_vprintf(default_mon, format, args);
     va_end(args);
 }
-
-#ifdef BAD_SPRINTF
-
-#undef vsprintf
-#undef sprintf
-
-/*
- * Some BSD-derived systems have a sprintf which returns char *
- */
-
-int
-vsprintf_len(string, format, args)
-	char *string;
-	const char *format;
-	va_list args;
-{
-	vsprintf(string, format, args);
-	return strlen(string);
-}
-
-int
-#ifdef __STDC__
-sprintf_len(char *string, const char *format, ...)
-#else
-sprintf_len(va_alist) va_dcl
-#endif
-{
-	va_list args;
-#ifdef __STDC__
-	va_start(args, format);
-#else
-	char *string;
-	char *format;
-	va_start(args);
-	string = va_arg(args, char *);
-	format = va_arg(args, char *);
-#endif
-	vsprintf(string, format, args);
-	return strlen(string);
-}
-
-#endif
 
 void
 u_sleep(int usec)

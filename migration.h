@@ -16,6 +16,7 @@
 
 #include "qdict.h"
 #include "qemu-common.h"
+#include "notify.h"
 
 #define MIG_STATE_ERROR		-1
 #define MIG_STATE_COMPLETED	0
@@ -50,7 +51,9 @@ struct FdMigrationState
     void *opaque;
 };
 
-void qemu_start_incoming_migration(const char *uri);
+void process_incoming_migration(QEMUFile *f);
+
+int qemu_start_incoming_migration(const char *uri);
 
 int do_migrate(Monitor *mon, const QDict *qdict, QObject **ret_data);
 
@@ -107,7 +110,7 @@ void migrate_fd_monitor_suspend(FdMigrationState *s, Monitor *mon);
 
 void migrate_fd_error(FdMigrationState *s);
 
-void migrate_fd_cleanup(FdMigrationState *s);
+int migrate_fd_cleanup(FdMigrationState *s);
 
 void migrate_fd_put_notify(void *opaque);
 
@@ -131,5 +134,18 @@ static inline FdMigrationState *migrate_to_fms(MigrationState *mig_state)
 {
     return container_of(mig_state, FdMigrationState, mig_state);
 }
+
+void add_migration_state_change_notifier(Notifier *notify);
+void remove_migration_state_change_notifier(Notifier *notify);
+int get_migration_state(void);
+
+uint64_t ram_bytes_remaining(void);
+uint64_t ram_bytes_transferred(void);
+uint64_t ram_bytes_total(void);
+
+int ram_save_live(Monitor *mon, QEMUFile *f, int stage, void *opaque);
+int ram_load(QEMUFile *f, void *opaque, int version_id);
+
+extern int incoming_expected;
 
 #endif

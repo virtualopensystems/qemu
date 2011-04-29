@@ -24,7 +24,9 @@
 
 #include "qemu-queue.h"
 #include "osdep.h"
+#include "sysemu.h"
 #include "qemu-common.h"
+#include "trace.h"
 #include "block_int.h"
 
 #include "block/raw-posix-aio.h"
@@ -35,7 +37,7 @@ struct qemu_paiocb {
     int aio_fildes;
     union {
         struct iovec *aio_iov;
-	void *aio_ioctl_buf;
+        void *aio_ioctl_buf;
     };
     int aio_niov;
     size_t aio_nbytes;
@@ -119,21 +121,21 @@ static void thread_create(pthread_t *thread, pthread_attr_t *attr,
 
 static ssize_t handle_aiocb_ioctl(struct qemu_paiocb *aiocb)
 {
-	int ret;
+    int ret;
 
-	ret = ioctl(aiocb->aio_fildes, aiocb->aio_ioctl_cmd, aiocb->aio_ioctl_buf);
-	if (ret == -1)
-		return -errno;
+    ret = ioctl(aiocb->aio_fildes, aiocb->aio_ioctl_cmd, aiocb->aio_ioctl_buf);
+    if (ret == -1)
+        return -errno;
 
-	/*
-	 * This looks weird, but the aio code only consideres a request
-	 * successfull if it has written the number full number of bytes.
-	 *
-	 * Now we overload aio_nbytes as aio_ioctl_cmd for the ioctl command,
-	 * so in fact we return the ioctl command here to make posix_aio_read()
-	 * happy..
-	 */
-	return aiocb->aio_nbytes;
+    /*
+     * This looks weird, but the aio code only consideres a request
+     * successful if it has written the number full number of bytes.
+     *
+     * Now we overload aio_nbytes as aio_ioctl_cmd for the ioctl command,
+     * so in fact we return the ioctl command here to make posix_aio_read()
+     * happy..
+     */
+    return aiocb->aio_nbytes;
 }
 
 static ssize_t handle_aiocb_flush(struct qemu_paiocb *aiocb)
@@ -249,10 +251,10 @@ static ssize_t handle_aiocb_rw(struct qemu_paiocb *aiocb)
          * Try preadv/pwritev first and fall back to linearizing the
          * buffer if it's not supported.
          */
-	if (preadv_present) {
+        if (preadv_present) {
             nbytes = handle_aiocb_rw_vector(aiocb);
             if (nbytes == aiocb->aio_nbytes)
-	        return nbytes;
+                return nbytes;
             if (nbytes < 0 && nbytes != -ENOSYS)
                 return nbytes;
             preadv_present = 0;
@@ -269,7 +271,7 @@ static ssize_t handle_aiocb_rw(struct qemu_paiocb *aiocb)
      * Ok, we have to do it the hard way, copy all segments into
      * a single aligned buffer.
      */
-    buf = qemu_memalign(512, aiocb->aio_nbytes);
+    buf = qemu_blockalign(aiocb->common.bs, aiocb->aio_nbytes);
     if (aiocb->aio_type & QEMU_AIO_WRITE) {
         char *p = buf;
         int i;
@@ -335,19 +337,19 @@ static void *aio_thread(void *unused)
         switch (aiocb->aio_type & QEMU_AIO_TYPE_MASK) {
         case QEMU_AIO_READ:
         case QEMU_AIO_WRITE:
-		ret = handle_aiocb_rw(aiocb);
-		break;
+            ret = handle_aiocb_rw(aiocb);
+            break;
         case QEMU_AIO_FLUSH:
-                ret = handle_aiocb_flush(aiocb);
-                break;
+            ret = handle_aiocb_flush(aiocb);
+            break;
         case QEMU_AIO_IOCTL:
-		ret = handle_aiocb_ioctl(aiocb);
-		break;
-	default:
-		fprintf(stderr, "invalid aio request (0x%x)\n", aiocb->aio_type);
-		ret = -EINVAL;
-		break;
-	}
+            ret = handle_aiocb_ioctl(aiocb);
+            break;
+        default:
+            fprintf(stderr, "invalid aio request (0x%x)\n", aiocb->aio_type);
+            ret = -EINVAL;
+            break;
+        }
 
         mutex_lock(&lock);
         aiocb->ret = ret;
@@ -453,6 +455,9 @@ static int posix_aio_process_queue(void *opaque)
                 } else {
                     ret = -ret;
                 }
+
+                trace_paio_complete(acb, acb->common.opaque, ret);
+
                 /* remove the request */
                 *pacb = acb->next;
                 /* call the callback */
@@ -535,6 +540,8 @@ static void paio_cancel(BlockDriverAIOCB *blockacb)
     struct qemu_paiocb *acb = (struct qemu_paiocb *)blockacb;
     int active = 0;
 
+    trace_paio_cancel(acb, acb->common.opaque);
+
     mutex_lock(&lock);
     if (!acb->active) {
         QTAILQ_REMOVE(&request_list, acb, node);
@@ -583,6 +590,7 @@ BlockDriverAIOCB *paio_submit(BlockDriverState *bs, int fd,
     acb->next = posix_aio_state->first_aio;
     posix_aio_state->first_aio = acb;
 
+    trace_paio_submit(acb, opaque, sector_num, nb_sectors, type);
     qemu_paio_submit(acb);
     return &acb->common;
 }
@@ -599,6 +607,7 @@ BlockDriverAIOCB *paio_ioctl(BlockDriverState *bs, int fd,
     acb->aio_type = QEMU_AIO_IOCTL;
     acb->aio_fildes = fd;
     acb->ev_signo = SIGUSR2;
+    acb->async_context_id = get_async_context_id();
     acb->aio_offset = 0;
     acb->aio_ioctl_buf = buf;
     acb->aio_ioctl_cmd = req;

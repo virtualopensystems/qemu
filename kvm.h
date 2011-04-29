@@ -14,7 +14,6 @@
 #ifndef QEMU_KVM_H
 #define QEMU_KVM_H
 
-#include <stdbool.h>
 #include <errno.h>
 #include "config-host.h"
 #include "qemu-queue.h"
@@ -23,8 +22,9 @@
 #include <linux/kvm.h>
 #endif
 
-#ifdef CONFIG_KVM
 extern int kvm_allowed;
+
+#if defined CONFIG_KVM || !defined NEED_CPU_H
 #define kvm_enabled() (kvm_allowed)
 #else
 #define kvm_enabled() (0)
@@ -32,9 +32,25 @@ extern int kvm_allowed;
 
 struct kvm_run;
 
+typedef struct KVMCapabilityInfo {
+    const char *name;
+    int value;
+} KVMCapabilityInfo;
+
+#define KVM_CAP_INFO(CAP) { "KVM_CAP_" stringify(CAP), KVM_CAP_##CAP }
+#define KVM_CAP_LAST_INFO { NULL, 0 }
+
 /* external API */
 
-int kvm_init(int smp_cpus);
+int kvm_init(void);
+
+int kvm_has_sync_mmu(void);
+int kvm_has_vcpu_events(void);
+int kvm_has_robust_singlestep(void);
+int kvm_has_debugregs(void);
+int kvm_has_xsave(void);
+int kvm_has_xcrs(void);
+int kvm_has_many_ioeventfds(void);
 
 #ifdef NEED_CPU_H
 int kvm_init_vcpu(CPUState *env);
@@ -42,13 +58,6 @@ int kvm_init_vcpu(CPUState *env);
 int kvm_cpu_exec(CPUState *env);
 
 #if !defined(CONFIG_USER_ONLY)
-int kvm_log_start(target_phys_addr_t phys_addr, ram_addr_t size);
-int kvm_log_stop(target_phys_addr_t phys_addr, ram_addr_t size);
-
-int kvm_has_sync_mmu(void);
-int kvm_has_vcpu_events(void);
-int kvm_has_robust_singlestep(void);
-
 void kvm_setup_guest_memory(void *start, size_t size);
 
 int kvm_coalesce_mmio_region(target_phys_addr_t start, ram_addr_t size);
@@ -69,10 +78,14 @@ int kvm_set_signal_mask(CPUState *env, const sigset_t *sigset);
 int kvm_pit_in_kernel(void);
 int kvm_irqchip_in_kernel(void);
 
+int kvm_on_sigbus_vcpu(CPUState *env, int code, void *addr);
+int kvm_on_sigbus(int code, void *addr);
+
 /* internal API */
 
 struct KVMState;
 typedef struct KVMState KVMState;
+extern KVMState *kvm_state;
 
 int kvm_ioctl(KVMState *s, int type, ...);
 
@@ -82,11 +95,14 @@ int kvm_vcpu_ioctl(CPUState *env, int type, ...);
 
 /* Arch specific hooks */
 
-int kvm_arch_post_run(CPUState *env, struct kvm_run *run);
+extern const KVMCapabilityInfo kvm_arch_required_capabilities[];
+
+void kvm_arch_pre_run(CPUState *env, struct kvm_run *run);
+void kvm_arch_post_run(CPUState *env, struct kvm_run *run);
 
 int kvm_arch_handle_exit(CPUState *env, struct kvm_run *run);
 
-int kvm_arch_pre_run(CPUState *env, struct kvm_run *run);
+int kvm_arch_process_async_events(CPUState *env);
 
 int kvm_arch_get_registers(CPUState *env);
 
@@ -99,13 +115,16 @@ int kvm_arch_get_registers(CPUState *env);
 
 int kvm_arch_put_registers(CPUState *env, int level);
 
-int kvm_arch_init(KVMState *s, int smp_cpus);
+int kvm_arch_init(KVMState *s);
 
 int kvm_arch_init_vcpu(CPUState *env);
 
 void kvm_arch_reset_vcpu(CPUState *env);
 
 int kvm_arch_interrupt(CPUState *env, int irq, int level);
+
+int kvm_arch_on_sigbus_vcpu(CPUState *env, int code, void *addr);
+int kvm_arch_on_sigbus(int code, void *addr);
 
 struct kvm_guest_debug;
 struct kvm_debug_exit_arch;
@@ -118,8 +137,6 @@ struct kvm_sw_breakpoint {
 };
 
 QTAILQ_HEAD(kvm_sw_breakpoint_head, kvm_sw_breakpoint);
-
-int kvm_arch_debug(struct kvm_debug_exit_arch *arch_info);
 
 struct kvm_sw_breakpoint *kvm_find_sw_breakpoint(CPUState *env,
                                                  target_ulong pc);
@@ -138,10 +155,12 @@ void kvm_arch_remove_all_hw_breakpoints(void);
 
 void kvm_arch_update_guest_debug(CPUState *env, struct kvm_guest_debug *dbg);
 
+bool kvm_arch_stop_on_emulation_error(CPUState *env);
+
 int kvm_check_extension(KVMState *s, unsigned int extension);
 
 uint32_t kvm_arch_get_supported_cpuid(CPUState *env, uint32_t function,
-                                      int reg);
+                                      uint32_t index, int reg);
 void kvm_cpu_synchronize_state(CPUState *env);
 void kvm_cpu_synchronize_post_reset(CPUState *env);
 void kvm_cpu_synchronize_post_init(CPUState *env);
@@ -169,15 +188,14 @@ static inline void cpu_synchronize_post_init(CPUState *env)
     }
 }
 
-#if defined(KVM_IOEVENTFD) && defined(CONFIG_KVM)
-int kvm_set_ioeventfd_pio_word(int fd, uint16_t adr, uint16_t val, bool assign);
-#else
-static inline
-int kvm_set_ioeventfd_pio_word(int fd, uint16_t adr, uint16_t val, bool assign)
-{
-    return -ENOSYS;
-}
+
+#if !defined(CONFIG_USER_ONLY)
+int kvm_physical_memory_addr_from_ram(KVMState *s, ram_addr_t ram_addr,
+                                      target_phys_addr_t *phys_addr);
 #endif
 
 #endif
+int kvm_set_ioeventfd_mmio_long(int fd, uint32_t adr, uint32_t val, bool assign);
+
+int kvm_set_ioeventfd_pio_word(int fd, uint16_t adr, uint16_t val, bool assign);
 #endif

@@ -66,7 +66,7 @@ int select_watchdog(const char *p)
     QLIST_FOREACH(model, &watchdog_list, entry) {
         if (strcasecmp(model->wdt_name, p) == 0) {
             /* add the device */
-            opts = qemu_opts_create(&qemu_device_opts, NULL, 0);
+            opts = qemu_opts_create(qemu_find_opts("device"), NULL, 0);
             qemu_opt_set(opts, "driver", p);
             return 0;
         }
@@ -132,7 +132,7 @@ void watchdog_perform_action(void)
 
     case WDT_PAUSE:             /* same as 'stop' command in monitor */
         watchdog_mon_event("pause");
-        vm_stop(0);
+        vm_stop(VMSTOP_WATCHDOG);
         break;
 
     case WDT_DEBUG:

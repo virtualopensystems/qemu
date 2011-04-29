@@ -138,11 +138,20 @@ typedef union {
     uint64_t ll;
 } CPU_DoubleU;
 
-#ifdef TARGET_SPARC
+#if defined(FLOATX80)
+typedef union {
+     floatx80 d;
+     struct {
+         uint64_t lower;
+         uint16_t upper;
+     } l;
+} CPU_LDoubleU;
+#endif
+
+#if defined(CONFIG_SOFTFLOAT)
 typedef union {
     float128 q;
-#if defined(HOST_WORDS_BIGENDIAN) \
-    || (defined(__arm__) && !defined(__VFP_FP__) && !defined(CONFIG_SOFTFLOAT))
+#if defined(HOST_WORDS_BIGENDIAN)
     struct {
         uint32_t upmost;
         uint32_t upper;
@@ -627,9 +636,12 @@ static inline void stfq_be_p(void *ptr, float64 v)
 #if defined(CONFIG_USE_GUEST_BASE)
 extern unsigned long guest_base;
 extern int have_guest_base;
+extern unsigned long reserved_va;
 #define GUEST_BASE guest_base
+#define RESERVED_VA reserved_va
 #else
 #define GUEST_BASE 0ul
+#define RESERVED_VA 0ul
 #endif
 
 /* All direct uses of g2h and h2g need to go away for usermode softmmu.  */
@@ -742,7 +754,10 @@ extern unsigned long qemu_host_page_mask;
 /* original state of the write flag (used when tracking self-modifying
    code */
 #define PAGE_WRITE_ORG 0x0010
+#if defined(CONFIG_BSD) && defined(CONFIG_USER_ONLY)
+/* FIXME: Code that sets/uses this is broken and needs to go away.  */
 #define PAGE_RESERVED  0x0020
+#endif
 
 #if defined(CONFIG_USER_ONLY)
 void page_dump(FILE *f);
@@ -759,15 +774,15 @@ int page_check_range(target_ulong start, target_ulong len, int flags);
 CPUState *cpu_copy(CPUState *env);
 CPUState *qemu_get_cpu(int cpu);
 
-void cpu_dump_state(CPUState *env, FILE *f,
-                    int (*cpu_fprintf)(FILE *f, const char *fmt, ...),
+#define CPU_DUMP_CODE 0x00010000
+
+void cpu_dump_state(CPUState *env, FILE *f, fprintf_function cpu_fprintf,
                     int flags);
-void cpu_dump_statistics (CPUState *env, FILE *f,
-                          int (*cpu_fprintf)(FILE *f, const char *fmt, ...),
-                          int flags);
+void cpu_dump_statistics(CPUState *env, FILE *f, fprintf_function cpu_fprintf,
+                         int flags);
 
 void QEMU_NORETURN cpu_abort(CPUState *env, const char *fmt, ...)
-    __attribute__ ((__format__ (__printf__, 2, 3)));
+    GCC_FMT_ATTR(2, 3);
 extern CPUState *first_cpu;
 extern CPUState *cpu_single_env;
 
@@ -818,6 +833,8 @@ void cpu_watchpoint_remove_all(CPUState *env, int mask);
 
 void cpu_single_step(CPUState *env, int enabled);
 void cpu_reset(CPUState *s);
+int cpu_is_stopped(CPUState *env);
+void run_on_cpu(CPUState *env, void (*func)(void *data), void *data);
 
 #define CPU_LOG_TB_OUT_ASM (1 << 0)
 #define CPU_LOG_TB_IN_ASM  (1 << 1)
@@ -853,9 +870,28 @@ target_phys_addr_t cpu_get_phys_page_debug(CPUState *env, target_ulong addr);
 /* memory API */
 
 extern int phys_ram_fd;
-extern uint8_t *phys_ram_dirty;
 extern ram_addr_t ram_size;
-extern ram_addr_t last_ram_offset;
+
+/* RAM is pre-allocated and passed into qemu_ram_alloc_from_ptr */
+#define RAM_PREALLOC_MASK   (1 << 0)
+
+typedef struct RAMBlock {
+    uint8_t *host;
+    ram_addr_t offset;
+    ram_addr_t length;
+    uint32_t flags;
+    char idstr[256];
+    QLIST_ENTRY(RAMBlock) next;
+#if defined(__linux__) && !defined(TARGET_S390X)
+    int fd;
+#endif
+} RAMBlock;
+
+typedef struct RAMList {
+    uint8_t *phys_dirty;
+    QLIST_HEAD(ram, RAMBlock) blocks;
+} RAMList;
+extern RAMList ram_list;
 
 extern const char *mem_path;
 extern int mem_prealloc;
@@ -885,18 +921,44 @@ extern int mem_prealloc;
 /* read dirty bit (return 0 or 1) */
 static inline int cpu_physical_memory_is_dirty(ram_addr_t addr)
 {
-    return phys_ram_dirty[addr >> TARGET_PAGE_BITS] == 0xff;
+    return ram_list.phys_dirty[addr >> TARGET_PAGE_BITS] == 0xff;
+}
+
+static inline int cpu_physical_memory_get_dirty_flags(ram_addr_t addr)
+{
+    return ram_list.phys_dirty[addr >> TARGET_PAGE_BITS];
 }
 
 static inline int cpu_physical_memory_get_dirty(ram_addr_t addr,
                                                 int dirty_flags)
 {
-    return phys_ram_dirty[addr >> TARGET_PAGE_BITS] & dirty_flags;
+    return ram_list.phys_dirty[addr >> TARGET_PAGE_BITS] & dirty_flags;
 }
 
 static inline void cpu_physical_memory_set_dirty(ram_addr_t addr)
 {
-    phys_ram_dirty[addr >> TARGET_PAGE_BITS] = 0xff;
+    ram_list.phys_dirty[addr >> TARGET_PAGE_BITS] = 0xff;
+}
+
+static inline int cpu_physical_memory_set_dirty_flags(ram_addr_t addr,
+                                                      int dirty_flags)
+{
+    return ram_list.phys_dirty[addr >> TARGET_PAGE_BITS] |= dirty_flags;
+}
+
+static inline void cpu_physical_memory_mask_dirty_range(ram_addr_t start,
+                                                        int length,
+                                                        int dirty_flags)
+{
+    int i, mask, len;
+    uint8_t *p;
+
+    len = length >> TARGET_PAGE_BITS;
+    mask = ~dirty_flags;
+    p = ram_list.phys_dirty + (start >> TARGET_PAGE_BITS);
+    for (i = 0; i < len; i++) {
+        p[i] &= mask;
+    }
 }
 
 void cpu_physical_memory_reset_dirty(ram_addr_t start, ram_addr_t end,
@@ -910,26 +972,16 @@ int cpu_physical_memory_get_dirty_tracking(void);
 int cpu_physical_sync_dirty_bitmap(target_phys_addr_t start_addr,
                                    target_phys_addr_t end_addr);
 
-void dump_exec_info(FILE *f,
-                    int (*cpu_fprintf)(FILE *f, const char *fmt, ...));
+int cpu_physical_log_start(target_phys_addr_t start_addr,
+                           ram_addr_t size);
+
+int cpu_physical_log_stop(target_phys_addr_t start_addr,
+                          ram_addr_t size);
+
+void dump_exec_info(FILE *f, fprintf_function cpu_fprintf);
 #endif /* !CONFIG_USER_ONLY */
 
 int cpu_memory_rw_debug(CPUState *env, target_ulong addr,
                         uint8_t *buf, int len, int is_write);
-
-/* profiling */
-#ifdef CONFIG_PROFILER
-static inline int64_t profile_getclock(void)
-{
-    return cpu_get_real_ticks();
-}
-
-extern int64_t qemu_time, qemu_time_start;
-extern int64_t tlb_flush_time;
-extern int64_t dev_time;
-#endif
-
-void cpu_inject_x86_mce(CPUState *cenv, int bank, uint64_t status,
-                        uint64_t mcg_status, uint64_t addr, uint64_t misc);
 
 #endif /* CPU_ALL_H */

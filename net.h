@@ -1,7 +1,6 @@
 #ifndef QEMU_NET_H
 #define QEMU_NET_H
 
-#include <stdbool.h>
 #include "qemu-queue.h"
 #include "qemu-common.h"
 #include "qdict.h"
@@ -18,12 +17,14 @@ typedef struct NICConf {
     MACAddr macaddr;
     VLANState *vlan;
     VLANClientState *peer;
+    int32_t bootindex;
 } NICConf;
 
 #define DEFINE_NIC_PROPERTIES(_state, _conf)                            \
     DEFINE_PROP_MACADDR("mac",   _state, _conf.macaddr),                \
     DEFINE_PROP_VLAN("vlan",     _state, _conf.vlan),                   \
-    DEFINE_PROP_NETDEV("netdev", _state, _conf.peer)
+    DEFINE_PROP_NETDEV("netdev", _state, _conf.peer),                   \
+    DEFINE_PROP_INT32("bootindex", _state, _conf.bootindex, -1)
 
 /* VLANs support */
 
@@ -73,6 +74,7 @@ typedef struct NICState {
     VLANClientState nc;
     NICConf *conf;
     void *opaque;
+    bool peer_deleted;
 } NICState;
 
 struct VLANState {
@@ -118,7 +120,7 @@ int qemu_find_nic_model(NICInfo *nd, const char * const *models,
                         const char *default_model);
 
 void do_info_network(Monitor *mon);
-void do_set_link(Monitor *mon, const QDict *qdict);
+int do_set_link(Monitor *mon, const QDict *qdict, QObject **ret_data);
 
 /* NIC info */
 
@@ -132,7 +134,6 @@ struct NICInfo {
     VLANState *vlan;
     VLANClientState *netdev;
     int used;
-    int bootable;
     int nvectors;
 };
 
@@ -163,9 +164,10 @@ int net_client_parse(QemuOptsList *opts_list, const char *str);
 int net_init_clients(void);
 void net_check_clients(void);
 void net_cleanup(void);
-void net_set_boot_mask(int boot_mask);
 void net_host_device_add(Monitor *mon, const QDict *qdict);
 void net_host_device_remove(Monitor *mon, const QDict *qdict);
+int do_netdev_add(Monitor *mon, const QDict *qdict, QObject **ret_data);
+int do_netdev_del(Monitor *mon, const QDict *qdict, QObject **ret_data);
 
 #define DEFAULT_NETWORK_SCRIPT "/etc/qemu-ifup"
 #define DEFAULT_NETWORK_DOWN_SCRIPT "/etc/qemu-ifdown"

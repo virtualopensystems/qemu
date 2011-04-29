@@ -11,10 +11,10 @@
  *
  */
 
+#include "iov.h"
 #include "qemu-common.h"
 #include "virtio.h"
 #include "pc.h"
-#include "sysemu.h"
 #include "cpu.h"
 #include "monitor.h"
 #include "balloon.h"
@@ -27,6 +27,10 @@
 #if defined(__linux__)
 #include <sys/mman.h>
 #endif
+
+/* Disable guest-provided stats by now (https://bugzilla.redhat.com/show_bug.cgi?id=623903) */
+#define ENABLE_GUEST_STATS   0
+
 
 typedef struct VirtIOBalloon
 {
@@ -50,8 +54,8 @@ static void balloon_page(void *addr, int deflate)
 {
 #if defined(__linux__)
     if (!kvm_enabled() || kvm_has_sync_mmu())
-        madvise(addr, TARGET_PAGE_SIZE,
-                deflate ? MADV_WILLNEED : MADV_DONTNEED);
+        qemu_madvise(addr, TARGET_PAGE_SIZE,
+                deflate ? QEMU_MADV_WILLNEED : QEMU_MADV_DONTNEED);
 #endif
 }
 
@@ -82,41 +86,16 @@ static QObject *get_stats_qobject(VirtIOBalloon *dev)
                                   VIRTIO_BALLOON_PFN_SHIFT);
 
     stat_put(dict, "actual", actual);
+#if ENABLE_GUEST_STATS
     stat_put(dict, "mem_swapped_in", dev->stats[VIRTIO_BALLOON_S_SWAP_IN]);
     stat_put(dict, "mem_swapped_out", dev->stats[VIRTIO_BALLOON_S_SWAP_OUT]);
     stat_put(dict, "major_page_faults", dev->stats[VIRTIO_BALLOON_S_MAJFLT]);
     stat_put(dict, "minor_page_faults", dev->stats[VIRTIO_BALLOON_S_MINFLT]);
     stat_put(dict, "free_mem", dev->stats[VIRTIO_BALLOON_S_MEMFREE]);
     stat_put(dict, "total_mem", dev->stats[VIRTIO_BALLOON_S_MEMTOT]);
+#endif
 
     return QOBJECT(dict);
-}
-
-/* FIXME: once we do a virtio refactoring, this will get subsumed into common
- * code */
-static size_t memcpy_from_iovector(void *data, size_t offset, size_t size,
-                                   struct iovec *iov, int iovlen)
-{
-    int i;
-    uint8_t *ptr = data;
-    size_t iov_off = 0;
-    size_t data_off = 0;
-
-    for (i = 0; i < iovlen && size; i++) {
-        if (offset < (iov_off + iov[i].iov_len)) {
-            size_t len = MIN((iov_off + iov[i].iov_len) - offset , size);
-
-            memcpy(ptr + data_off, iov[i].iov_base + (offset - iov_off), len);
-
-            data_off += len;
-            offset += len;
-            size -= len;
-        }
-
-        iov_off += iov[i].iov_len;
-    }
-
-    return data_off;
 }
 
 static void virtio_balloon_handle_output(VirtIODevice *vdev, VirtQueue *vq)
@@ -128,8 +107,7 @@ static void virtio_balloon_handle_output(VirtIODevice *vdev, VirtQueue *vq)
         size_t offset = 0;
         uint32_t pfn;
 
-        while (memcpy_from_iovector(&pfn, offset, 4,
-                                    elem.out_sg, elem.out_num) == 4) {
+        while (iov_to_buf(elem.out_sg, elem.out_num, &pfn, offset, 4) == 4) {
             ram_addr_t pa;
             ram_addr_t addr;
 
@@ -181,8 +159,8 @@ static void virtio_balloon_receive_stats(VirtIODevice *vdev, VirtQueue *vq)
      */
     reset_stats(s);
 
-    while (memcpy_from_iovector(&stat, offset, sizeof(stat), elem->out_sg,
-                                elem->out_num) == sizeof(stat)) {
+    while (iov_to_buf(elem->out_sg, elem->out_num, &stat, offset, sizeof(stat))
+           == sizeof(stat)) {
         uint16_t tag = tswap16(stat.tag);
         uint64_t val = tswap64(stat.val);
 
@@ -212,7 +190,7 @@ static void virtio_balloon_set_config(VirtIODevice *vdev,
     VirtIOBalloon *dev = to_virtio_balloon(vdev);
     struct virtio_balloon_config config;
     memcpy(&config, config_data, 8);
-    dev->actual = config.actual;
+    dev->actual = le32_to_cpu(config.actual);
 }
 
 static uint32_t virtio_balloon_get_features(VirtIODevice *vdev, uint32_t f)
@@ -241,7 +219,7 @@ static void virtio_balloon_to_target(void *opaque, ram_addr_t target,
         }
         dev->stats_callback = cb;
         dev->stats_opaque_callback_data = cb_data; 
-        if (dev->vdev.guest_features & (1 << VIRTIO_BALLOON_F_STATS_VQ)) {
+        if (ENABLE_GUEST_STATS && (dev->vdev.guest_features & (1 << VIRTIO_BALLOON_F_STATS_VQ))) {
             virtqueue_push(dev->svq, &dev->stats_vq_elem, dev->stats_vq_offset);
             virtio_notify(&dev->vdev, dev->svq);
         } else {
@@ -297,7 +275,8 @@ VirtIODevice *virtio_balloon_init(DeviceState *dev)
     reset_stats(s);
     qemu_add_balloon_handler(virtio_balloon_to_target, s);
 
-    register_savevm("virtio-balloon", -1, 1, virtio_balloon_save, virtio_balloon_load, s);
+    register_savevm(dev, "virtio-balloon", -1, 1,
+                    virtio_balloon_save, virtio_balloon_load, s);
 
     return &s->vdev;
 }

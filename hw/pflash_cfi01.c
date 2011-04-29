@@ -166,6 +166,22 @@ static uint32_t pflash_read (pflash_t *pfl, target_phys_addr_t offset,
         ret = pfl->status;
         DPRINTF("%s: status %x\n", __func__, ret);
         break;
+    case 0x90:
+        switch (boff) {
+        case 0:
+            ret = pfl->ident[0] << 8 | pfl->ident[1];
+            DPRINTF("%s: Manufacturer Code %04x\n", __func__, ret);
+            break;
+        case 1:
+            ret = pfl->ident[2] << 8 | pfl->ident[3];
+            DPRINTF("%s: Device ID Code %04x\n", __func__, ret);
+            break;
+        default:
+            DPRINTF("%s: Read Device Information boff=%x\n", __func__, boff);
+            ret = 0;
+            break;
+        }
+        break;
     case 0x98: /* Query mode */
         if (boff > pfl->cfi_len)
             ret = 0;
@@ -281,6 +297,10 @@ static void pflash_write(pflash_t *pfl, target_phys_addr_t offset,
             break;
         case 0x70: /* Status Register */
             DPRINTF("%s: Read status register\n", __func__);
+            pfl->cmd = cmd;
+            return;
+        case 0x90: /* Read Device ID */
+            DPRINTF("%s: Read Device information\n", __func__);
             pfl->cmd = cmd;
             return;
         case 0x98: /* CFI query */
@@ -542,7 +562,9 @@ static int ctz32 (uint32_t n)
     }
     if (!(n & 0x1)) {
         ret++;
+#if 0 /* This is not necessary as n is never 0 */
         n = n >> 1;
+#endif
     }
 #if 0 /* This is not necessary as n is never 0 */
     if (!n)
@@ -578,10 +600,12 @@ pflash_t *pflash_cfi01_register(target_phys_addr_t base, ram_addr_t off,
     pfl->storage = qemu_get_ram_ptr(off);
     if (be) {
         pfl->fl_mem = cpu_register_io_memory(pflash_read_ops_be,
-                                             pflash_write_ops_be, pfl);
+                                             pflash_write_ops_be, pfl,
+                                             DEVICE_NATIVE_ENDIAN);
     } else {
         pfl->fl_mem = cpu_register_io_memory(pflash_read_ops_le,
-                                             pflash_write_ops_le, pfl);
+                                             pflash_write_ops_le, pfl,
+                                             DEVICE_NATIVE_ENDIAN);
     }
     pfl->off = off;
     cpu_register_physical_memory(base, total_len,
@@ -604,7 +628,7 @@ pflash_t *pflash_cfi01_register(target_phys_addr_t base, ram_addr_t off,
 #else
     pfl->ro = 0;
 #endif
-    pfl->timer = qemu_new_timer(vm_clock, pflash_timer, pfl);
+    pfl->timer = qemu_new_timer_ns(vm_clock, pflash_timer, pfl);
     pfl->base = base;
     pfl->sector_len = sector_len;
     pfl->total_len = total_len;

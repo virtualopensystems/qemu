@@ -27,7 +27,6 @@
 #include <hw/mac_dbdma.h>
 #include "block.h"
 #include "block_int.h"
-#include "sysemu.h"
 #include "dma.h"
 
 #include <hw/ide/internal.h>
@@ -162,7 +161,7 @@ static void pmac_ide_transfer(DBDMA_io *io)
     IDEState *s = idebus_active_if(&m->bus);
 
     s->io_buffer_size = 0;
-    if (s->is_cdrom) {
+    if (s->drive_kind == IDE_CD) {
         pmac_ide_atapi_transfer_cb(io, 0);
         return;
     }
@@ -314,14 +313,15 @@ int pmac_ide_init (DriveInfo **hd_table, qemu_irq irq,
     int pmac_ide_memory;
 
     d = qemu_mallocz(sizeof(MACIOIDEState));
-    ide_init2(&d->bus, hd_table[0], hd_table[1], irq);
+    ide_init2_with_non_qdev_drives(&d->bus, hd_table[0], hd_table[1], irq);
 
     if (dbdma)
         DBDMA_register_channel(dbdma, channel, dma_irq, pmac_ide_transfer, pmac_ide_flush, d);
 
     pmac_ide_memory = cpu_register_io_memory(pmac_ide_read,
-                                             pmac_ide_write, d);
-    vmstate_register(0, &vmstate_pmac, d);
+                                             pmac_ide_write, d,
+                                             DEVICE_NATIVE_ENDIAN);
+    vmstate_register(NULL, 0, &vmstate_pmac, d);
     qemu_register_reset(pmac_ide_reset, d);
 
     return pmac_ide_memory;

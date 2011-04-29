@@ -44,6 +44,9 @@
     that we generate the list.
 */
 static struct audio_driver *drvtab[] = {
+#ifdef CONFIG_SPICE
+    &spice_audio_driver,
+#endif
     CONFIG_AUDIO_DRIVERS
     &no_audio_driver,
     &wav_audio_driver
@@ -101,7 +104,7 @@ static struct {
 
 static AudioState glob_audio_state;
 
-struct mixeng_volume nominal_volume = {
+const struct mixeng_volume nominal_volume = {
     .mute = 0,
 #ifdef FLOAT_MIXENG
     .r = 1.0,
@@ -699,13 +702,11 @@ void audio_pcm_info_clear_buf (struct audio_pcm_info *info, void *buf, int len)
 /*
  * Capture
  */
-static void noop_conv (struct st_sample *dst, const void *src,
-                       int samples, struct mixeng_volume *vol)
+static void noop_conv (struct st_sample *dst, const void *src, int samples)
 {
     (void) src;
     (void) dst;
     (void) samples;
-    (void) vol;
 }
 
 static CaptureVoiceOut *audio_pcm_capture_find_specific (
@@ -953,6 +954,8 @@ int audio_pcm_sw_read (SWVoiceIn *sw, void *buf, int size)
         total += isamp;
     }
 
+    mixeng_volume (sw->buf, ret, &sw->vol);
+
     sw->clip (buf, sw->buf, ret);
     sw->total_hw_samples_acquired += total;
     return ret << sw->info.shift;
@@ -1034,7 +1037,8 @@ int audio_pcm_sw_write (SWVoiceOut *sw, void *buf, int size)
     swlim = ((int64_t) dead << 32) / sw->ratio;
     swlim = audio_MIN (swlim, samples);
     if (swlim) {
-        sw->conv (sw->buf, buf, swlim, &sw->vol);
+        sw->conv (sw->buf, buf, swlim);
+        mixeng_volume (sw->buf, swlim, &sw->vol);
     }
 
     while (swlim) {
@@ -1093,15 +1097,6 @@ static void audio_pcm_print_info (const char *cap, struct audio_pcm_info *info)
 /*
  * Timer
  */
-static void audio_timer (void *opaque)
-{
-    AudioState *s = opaque;
-
-    audio_run ("timer");
-    qemu_mod_timer (s->ts, qemu_get_clock (vm_clock) + conf.period.ticks);
-}
-
-
 static int audio_is_timer_needed (void)
 {
     HWVoiceIn *hwi = NULL;
@@ -1116,16 +1111,20 @@ static int audio_is_timer_needed (void)
     return 0;
 }
 
-static void audio_reset_timer (void)
+static void audio_reset_timer (AudioState *s)
 {
-    AudioState *s = &glob_audio_state;
-
     if (audio_is_timer_needed ()) {
-        qemu_mod_timer (s->ts, qemu_get_clock (vm_clock) + 1);
+        qemu_mod_timer (s->ts, qemu_get_clock_ns (vm_clock) + 1);
     }
     else {
         qemu_del_timer (s->ts);
     }
+}
+
+static void audio_timer (void *opaque)
+{
+    audio_run ("timer");
+    audio_reset_timer (opaque);
 }
 
 /*
@@ -1192,7 +1191,7 @@ void AUD_set_active_out (SWVoiceOut *sw, int on)
                 hw->enabled = 1;
                 if (s->vm_running) {
                     hw->pcm_ops->ctl_out (hw, VOICE_ENABLE, conf.try_poll_out);
-                    audio_reset_timer ();
+                    audio_reset_timer (s);
                 }
             }
         }
@@ -1237,6 +1236,7 @@ void AUD_set_active_in (SWVoiceIn *sw, int on)
                 hw->enabled = 1;
                 if (s->vm_running) {
                     hw->pcm_ops->ctl_in (hw, VOICE_ENABLE, conf.try_poll_in);
+                    audio_reset_timer (s);
                 }
             }
             sw->total_hw_samples_acquired = hw->total_samples_captured;
@@ -1758,7 +1758,7 @@ static void audio_vm_change_state_handler (void *opaque, int running,
     while ((hwi = audio_pcm_hw_find_any_enabled_in (hwi))) {
         hwi->pcm_ops->ctl_in (hwi, op, conf.try_poll_in);
     }
-    audio_reset_timer ();
+    audio_reset_timer (s);
 }
 
 static void audio_atexit (void)
@@ -1820,7 +1820,7 @@ static void audio_init (void)
     QLIST_INIT (&s->cap_head);
     atexit (audio_atexit);
 
-    s->ts = qemu_new_timer (vm_clock, audio_timer, s);
+    s->ts = qemu_new_timer_ns (vm_clock, audio_timer, s);
     if (!s->ts) {
         hw_error("Could not create audio timer\n");
     }
@@ -1901,7 +1901,7 @@ static void audio_init (void)
     }
 
     QLIST_INIT (&s->card_head);
-    vmstate_register (0, &vmstate_audio, s);
+    vmstate_register (NULL, 0, &vmstate_audio, s);
 }
 
 void AUD_register_card (const char *name, QEMUSoundCard *card)

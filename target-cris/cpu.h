@@ -156,6 +156,9 @@ typedef struct CPUCRISState {
 	} tlbsets[2][4][16];
 
 	CPU_COMMON
+
+	/* Members after CPU_COMMON are preserved across resets.  */
+	void *load_info;
 } CPUCRISState;
 
 CPUCRISState *cpu_cris_init(const char *cpu_model);
@@ -248,12 +251,6 @@ static inline void cpu_set_tls(CPUCRISState *env, target_ulong newtls)
 #define SFR_RW_MM_TLB_HI   env->pregs[PR_SRS]][6
 
 #include "cpu-all.h"
-#include "exec-all.h"
-
-static inline void cpu_pc_from_tb(CPUState *env, TranslationBlock *tb)
-{
-    env->pc = tb->pc;
-}
 
 static inline void cpu_get_tb_cpu_state(CPUState *env, target_ulong *pc,
                                         target_ulong *cs_base, int *flags)
@@ -266,6 +263,6 @@ static inline void cpu_get_tb_cpu_state(CPUState *env, target_ulong *pc,
 }
 
 #define cpu_list cris_cpu_list
-void cris_cpu_list(FILE *f, int (*cpu_fprintf)(FILE *f, const char *fmt, ...));
+void cris_cpu_list(FILE *f, fprintf_function cpu_fprintf);
 
 #endif

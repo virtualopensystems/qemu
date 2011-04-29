@@ -466,6 +466,7 @@ int cpu_alpha_mtpr (CPUState *env, int iprn, uint64_t val, uint64_t *oldvalp)
             env->ipr[IPR_SYSPTBR] = val;
         else
             ret = -1;
+        break;
     case IPR_TBCHK:
         /* Read-only */
         ret = -1;
@@ -536,8 +537,7 @@ void do_interrupt (CPUState *env)
 }
 #endif
 
-void cpu_dump_state (CPUState *env, FILE *f,
-                     int (*cpu_fprintf)(FILE *f, const char *fmt, ...),
+void cpu_dump_state (CPUState *env, FILE *f, fprintf_function cpu_fprintf,
                      int flags)
 {
     static const char *linux_reg_names[] = {
@@ -556,12 +556,15 @@ void cpu_dump_state (CPUState *env, FILE *f,
         if ((i % 3) == 2)
             cpu_fprintf(f, "\n");
     }
-    cpu_fprintf(f, "\n");
+
+    cpu_fprintf(f, "lock_a   " TARGET_FMT_lx " lock_v   " TARGET_FMT_lx "\n",
+                env->lock_addr, env->lock_value);
+
     for (i = 0; i < 31; i++) {
         cpu_fprintf(f, "FIR%02d    " TARGET_FMT_lx " ", i,
                     *((uint64_t *)(&env->fir[i])));
         if ((i % 3) == 2)
             cpu_fprintf(f, "\n");
     }
-    cpu_fprintf(f, "\nlock     " TARGET_FMT_lx "\n", env->lock);
+    cpu_fprintf(f, "\n");
 }

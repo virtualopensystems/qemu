@@ -153,6 +153,11 @@ static int glue(load_symbols, SZ)(struct elfhdr *ehdr, int fd, int must_swab,
         syms = qemu_realloc(syms, nsyms * sizeof(*syms));
 
         qsort(syms, nsyms, sizeof(*syms), glue(symcmp, SZ));
+        for (i = 0; i < nsyms - 1; i++) {
+            if (syms[i].st_size == 0) {
+                syms[i].st_size = syms[i + 1].st_value - syms[i].st_value;
+            }
+        }
     } else {
         qemu_free(syms);
         syms = NULL;
@@ -214,6 +219,11 @@ static int glue(load_elf, SZ)(const char *name, int fd,
         case EM_X86_64:
             if (EM_X86_64 != ehdr.e_machine)
                 if (EM_386 != ehdr.e_machine)
+                    goto fail;
+            break;
+        case EM_MICROBLAZE:
+            if (EM_MICROBLAZE != ehdr.e_machine)
+                if (EM_MICROBLAZE_OLD != ehdr.e_machine)
                     goto fail;
             break;
         default:

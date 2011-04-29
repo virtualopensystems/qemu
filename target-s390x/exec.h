@@ -31,17 +31,20 @@ register struct CPUS390XState *env asm(AREG0);
 
 static inline int cpu_has_work(CPUState *env)
 {
-    return env->interrupt_request & CPU_INTERRUPT_HARD; // guess
+    return ((env->interrupt_request & CPU_INTERRUPT_HARD) &&
+            (env->psw.mask & PSW_MASK_EXT));
 }
 
-static inline int cpu_halted(CPUState *env)
+static inline void regs_to_env(void)
 {
-    if (!env->halted) {
-       return 0;
-    }
-    if (cpu_has_work(env)) {
-        env->halted = 0;
-        return 0;
-    }
-    return EXCP_HALTED;
 }
+
+static inline void env_to_regs(void)
+{
+}
+
+static inline void cpu_pc_from_tb(CPUState *env, TranslationBlock* tb)
+{
+    env->psw.addr = tb->pc;
+}
+

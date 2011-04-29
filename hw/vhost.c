@@ -10,13 +10,11 @@
  * the COPYING file in the top-level directory.
  */
 
-#include <linux/vhost.h>
 #include <sys/ioctl.h>
-#include <sys/eventfd.h>
 #include "vhost.h"
 #include "hw/hw.h"
-/* For range_get_last */
-#include "pci.h"
+#include "range.h"
+#include <linux/vhost.h>
 
 static void vhost_dev_sync_region(struct vhost_dev *dev,
                                   uint64_t mfirst, uint64_t mlast,
@@ -39,6 +37,7 @@ static void vhost_dev_sync_region(struct vhost_dev *dev,
         /* We first check with non-atomic: much cheaper,
          * and we expect non-dirty to be the common case. */
         if (!*from) {
+            addr += VHOST_LOG_CHUNK;
             continue;
         }
         /* Data must be read atomically. We don't really
@@ -48,8 +47,10 @@ static void vhost_dev_sync_region(struct vhost_dev *dev,
         log = __sync_fetch_and_and(from, 0);
         while ((bit = sizeof(log) > sizeof(int) ?
                 ffsll(log) : ffs(log))) {
+            ram_addr_t ram_addr;
             bit -= 1;
-            cpu_physical_memory_set_dirty(addr + bit * VHOST_LOG_PAGE);
+            ram_addr = cpu_get_physical_page_desc(addr + bit * VHOST_LOG_PAGE);
+            cpu_physical_memory_set_dirty(ram_addr);
             log &= ~(0x1ull << bit);
         }
         addr += VHOST_LOG_CHUNK;
@@ -456,11 +457,6 @@ static int vhost_virtqueue_init(struct vhost_dev *dev,
     };
     struct VirtQueue *vvq = virtio_get_queue(vdev, idx);
 
-    if (!vdev->binding->set_guest_notifier) {
-        fprintf(stderr, "binding does not support guest notifiers\n");
-        return -ENOSYS;
-    }
-
     if (!vdev->binding->set_host_notifier) {
         fprintf(stderr, "binding does not support host notifiers\n");
         return -ENOSYS;
@@ -513,12 +509,6 @@ static int vhost_virtqueue_init(struct vhost_dev *dev,
         r = -errno;
         goto fail_alloc;
     }
-    r = vdev->binding->set_guest_notifier(vdev->binding_opaque, idx, true);
-    if (r < 0) {
-        fprintf(stderr, "Error binding guest notifier: %d\n", -r);
-        goto fail_guest_notifier;
-    }
-
     r = vdev->binding->set_host_notifier(vdev->binding_opaque, idx, true);
     if (r < 0) {
         fprintf(stderr, "Error binding host notifier: %d\n", -r);
@@ -528,12 +518,14 @@ static int vhost_virtqueue_init(struct vhost_dev *dev,
     file.fd = event_notifier_get_fd(virtio_queue_get_host_notifier(vvq));
     r = ioctl(dev->control, VHOST_SET_VRING_KICK, &file);
     if (r) {
+        r = -errno;
         goto fail_kick;
     }
 
     file.fd = event_notifier_get_fd(virtio_queue_get_guest_notifier(vvq));
     r = ioctl(dev->control, VHOST_SET_VRING_CALL, &file);
     if (r) {
+        r = -errno;
         goto fail_call;
     }
 
@@ -543,8 +535,6 @@ fail_call:
 fail_kick:
     vdev->binding->set_host_notifier(vdev->binding_opaque, idx, false);
 fail_host_notifier:
-    vdev->binding->set_guest_notifier(vdev->binding_opaque, idx, false);
-fail_guest_notifier:
 fail_alloc:
     cpu_physical_memory_unmap(vq->ring, virtio_queue_get_ring_size(vdev, idx),
                               0, 0);
@@ -570,13 +560,6 @@ static void vhost_virtqueue_cleanup(struct vhost_dev *dev,
         .index = idx,
     };
     int r;
-    r = vdev->binding->set_guest_notifier(vdev->binding_opaque, idx, false);
-    if (r < 0) {
-        fprintf(stderr, "vhost VQ %d guest cleanup failed: %d\n", idx, r);
-        fflush(stderr);
-    }
-    assert (r >= 0);
-
     r = vdev->binding->set_host_notifier(vdev->binding_opaque, idx, false);
     if (r < 0) {
         fprintf(stderr, "vhost VQ %d host cleanup failed: %d\n", idx, r);
@@ -600,7 +583,7 @@ static void vhost_virtqueue_cleanup(struct vhost_dev *dev,
                               0, virtio_queue_get_desc_size(vdev, idx));
 }
 
-int vhost_dev_init(struct vhost_dev *hdev, int devfd)
+int vhost_dev_init(struct vhost_dev *hdev, int devfd, bool force)
 {
     uint64_t features;
     int r;
@@ -626,12 +609,15 @@ int vhost_dev_init(struct vhost_dev *hdev, int devfd)
     hdev->client.set_memory = vhost_client_set_memory;
     hdev->client.sync_dirty_bitmap = vhost_client_sync_dirty_bitmap;
     hdev->client.migration_log = vhost_client_migration_log;
+    hdev->client.log_start = NULL;
+    hdev->client.log_stop = NULL;
     hdev->mem = qemu_mallocz(offsetof(struct vhost_memory, regions));
     hdev->log = NULL;
     hdev->log_size = 0;
     hdev->log_enabled = false;
     hdev->started = false;
     cpu_register_phys_memory_client(&hdev->client);
+    hdev->force = force;
     return 0;
 fail:
     r = -errno;
@@ -646,31 +632,37 @@ void vhost_dev_cleanup(struct vhost_dev *hdev)
     close(hdev->control);
 }
 
+bool vhost_dev_query(struct vhost_dev *hdev, VirtIODevice *vdev)
+{
+    return !vdev->binding->query_guest_notifiers ||
+        vdev->binding->query_guest_notifiers(vdev->binding_opaque) ||
+        hdev->force;
+}
+
 int vhost_dev_start(struct vhost_dev *hdev, VirtIODevice *vdev)
 {
     int i, r;
+    if (!vdev->binding->set_guest_notifiers) {
+        fprintf(stderr, "binding does not support guest notifiers\n");
+        r = -ENOSYS;
+        goto fail;
+    }
+
+    r = vdev->binding->set_guest_notifiers(vdev->binding_opaque, true);
+    if (r < 0) {
+        fprintf(stderr, "Error binding guest notifier: %d\n", -r);
+        goto fail_notifiers;
+    }
 
     r = vhost_dev_set_features(hdev, hdev->log_enabled);
     if (r < 0) {
-        goto fail;
+        goto fail_features;
     }
     r = ioctl(hdev->control, VHOST_SET_MEM_TABLE, hdev->mem);
     if (r < 0) {
         r = -errno;
-        goto fail;
+        goto fail_mem;
     }
-    if (hdev->log_enabled) {
-        hdev->log_size = vhost_get_log_size(hdev);
-        hdev->log = hdev->log_size ?
-            qemu_mallocz(hdev->log_size * sizeof *hdev->log) : NULL;
-        r = ioctl(hdev->control, VHOST_SET_LOG_BASE,
-                  (uint64_t)(unsigned long)hdev->log);
-        if (r < 0) {
-            r = -errno;
-            goto fail;
-        }
-    }
-
     for (i = 0; i < hdev->nvqs; ++i) {
         r = vhost_virtqueue_init(hdev,
                                  vdev,
@@ -680,9 +672,23 @@ int vhost_dev_start(struct vhost_dev *hdev, VirtIODevice *vdev)
             goto fail_vq;
         }
     }
+
+    if (hdev->log_enabled) {
+        hdev->log_size = vhost_get_log_size(hdev);
+        hdev->log = hdev->log_size ?
+            qemu_mallocz(hdev->log_size * sizeof *hdev->log) : NULL;
+        r = ioctl(hdev->control, VHOST_SET_LOG_BASE,
+                  (uint64_t)(unsigned long)hdev->log);
+        if (r < 0) {
+            r = -errno;
+            goto fail_log;
+        }
+    }
+
     hdev->started = true;
 
     return 0;
+fail_log:
 fail_vq:
     while (--i >= 0) {
         vhost_virtqueue_cleanup(hdev,
@@ -690,13 +696,18 @@ fail_vq:
                                 hdev->vqs + i,
                                 i);
     }
+fail_mem:
+fail_features:
+    vdev->binding->set_guest_notifiers(vdev->binding_opaque, false);
+fail_notifiers:
 fail:
     return r;
 }
 
 void vhost_dev_stop(struct vhost_dev *hdev, VirtIODevice *vdev)
 {
-    int i;
+    int i, r;
+
     for (i = 0; i < hdev->nvqs; ++i) {
         vhost_virtqueue_cleanup(hdev,
                                 vdev,
@@ -705,6 +716,13 @@ void vhost_dev_stop(struct vhost_dev *hdev, VirtIODevice *vdev)
     }
     vhost_client_sync_dirty_bitmap(&hdev->client, 0,
                                    (target_phys_addr_t)~0x0ull);
+    r = vdev->binding->set_guest_notifiers(vdev->binding_opaque, false);
+    if (r < 0) {
+        fprintf(stderr, "vhost guest notifier cleanup failed: %d\n", r);
+        fflush(stderr);
+    }
+    assert (r >= 0);
+
     hdev->started = false;
     qemu_free(hdev->log);
     hdev->log_size = 0;

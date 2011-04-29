@@ -19,7 +19,9 @@ int ppc_dcr_init (CPUState *env, int (*dcr_read_error)(int dcrn),
                   int (*dcr_write_error)(int dcrn));
 int ppc_dcr_register (CPUState *env, int dcrn, void *opaque,
                       dcr_read_cb drc_read, dcr_write_cb dcr_write);
-clk_setup_cb ppc_emb_timers_init (CPUState *env, uint32_t freq);
+clk_setup_cb ppc_emb_timers_init (CPUState *env, uint32_t freq,
+                                  unsigned int decr_excp);
+
 /* Embedded PowerPC reset */
 void ppc40x_core_reset (CPUState *env);
 void ppc40x_chip_reset (CPUState *env);
@@ -34,6 +36,7 @@ void ppc40x_irq_init (CPUState *env);
 void ppce500_irq_init (CPUState *env);
 void ppc6xx_irq_init (CPUState *env);
 void ppc970_irq_init (CPUState *env);
+void ppcPOWER7_irq_init (CPUState *env);
 
 /* PPC machines for OpenBIOS */
 enum {
@@ -47,5 +50,8 @@ enum {
 #define FW_CFG_PPC_HEIGHT	(FW_CFG_ARCH_LOCAL + 0x01)
 #define FW_CFG_PPC_DEPTH	(FW_CFG_ARCH_LOCAL + 0x02)
 #define FW_CFG_PPC_TBFREQ	(FW_CFG_ARCH_LOCAL + 0x03)
+#define FW_CFG_PPC_IS_KVM       (FW_CFG_ARCH_LOCAL + 0x05)
+#define FW_CFG_PPC_KVM_HC       (FW_CFG_ARCH_LOCAL + 0x06)
+#define FW_CFG_PPC_KVM_PID      (FW_CFG_ARCH_LOCAL + 0x07)
 
 #define PPC_SERIAL_MM_BAUDBASE 399193

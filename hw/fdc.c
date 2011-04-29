@@ -29,11 +29,14 @@
 
 #include "hw.h"
 #include "fdc.h"
-#include "block.h"
+#include "qemu-error.h"
 #include "qemu-timer.h"
 #include "isa.h"
 #include "sysbus.h"
 #include "qdev-addr.h"
+#include "blockdev.h"
+#include "sysemu.h"
+#include "block_int.h"
 
 /********************************************************/
 /* debug Floppy devices */
@@ -61,27 +64,11 @@
 #define FD_RESET_SENSEI_COUNT  4   /* Number of sense interrupts on RESET */
 
 /* Floppy disk drive emulation */
-typedef enum FDiskType {
-    FDRIVE_DISK_288   = 0x01, /* 2.88 MB disk           */
-    FDRIVE_DISK_144   = 0x02, /* 1.44 MB disk           */
-    FDRIVE_DISK_720   = 0x03, /* 720 kB disk            */
-    FDRIVE_DISK_USER  = 0x04, /* User defined geometry  */
-    FDRIVE_DISK_NONE  = 0x05, /* No disk                */
-} FDiskType;
-
-typedef enum FDriveType {
-    FDRIVE_DRV_144  = 0x00,   /* 1.44 MB 3"5 drive      */
-    FDRIVE_DRV_288  = 0x01,   /* 2.88 MB 3"5 drive      */
-    FDRIVE_DRV_120  = 0x02,   /* 1.2  MB 5"25 drive     */
-    FDRIVE_DRV_NONE = 0x03,   /* No drive connected     */
-} FDriveType;
-
 typedef enum FDiskFlags {
     FDISK_DBL_SIDES  = 0x01,
 } FDiskFlags;
 
 typedef struct FDrive {
-    DriveInfo *dinfo;
     BlockDriverState *bs;
     /* Drive status */
     FDriveType drive;
@@ -96,12 +83,12 @@ typedef struct FDrive {
     uint8_t max_track;        /* Nb of tracks           */
     uint16_t bps;             /* Bytes per sector       */
     uint8_t ro;               /* Is read-only           */
+    uint8_t media_changed;    /* Is media changed       */
 } FDrive;
 
 static void fd_init(FDrive *drv)
 {
     /* Drive */
-    drv->bs = drv->dinfo ? drv->dinfo->bdrv : NULL;
     drv->drive = FDRIVE_DRV_NONE;
     drv->perpendicular = 0;
     /* Disk */
@@ -178,111 +165,23 @@ static void fd_recalibrate(FDrive *drv)
     drv->sect = 1;
 }
 
-/* Recognize floppy formats */
-typedef struct FDFormat {
-    FDriveType drive;
-    FDiskType  disk;
-    uint8_t last_sect;
-    uint8_t max_track;
-    uint8_t max_head;
-    const char *str;
-} FDFormat;
-
-static const FDFormat fd_formats[] = {
-    /* First entry is default format */
-    /* 1.44 MB 3"1/2 floppy disks */
-    { FDRIVE_DRV_144, FDRIVE_DISK_144, 18, 80, 1, "1.44 MB 3\"1/2", },
-    { FDRIVE_DRV_144, FDRIVE_DISK_144, 20, 80, 1,  "1.6 MB 3\"1/2", },
-    { FDRIVE_DRV_144, FDRIVE_DISK_144, 21, 80, 1, "1.68 MB 3\"1/2", },
-    { FDRIVE_DRV_144, FDRIVE_DISK_144, 21, 82, 1, "1.72 MB 3\"1/2", },
-    { FDRIVE_DRV_144, FDRIVE_DISK_144, 21, 83, 1, "1.74 MB 3\"1/2", },
-    { FDRIVE_DRV_144, FDRIVE_DISK_144, 22, 80, 1, "1.76 MB 3\"1/2", },
-    { FDRIVE_DRV_144, FDRIVE_DISK_144, 23, 80, 1, "1.84 MB 3\"1/2", },
-    { FDRIVE_DRV_144, FDRIVE_DISK_144, 24, 80, 1, "1.92 MB 3\"1/2", },
-    /* 2.88 MB 3"1/2 floppy disks */
-    { FDRIVE_DRV_288, FDRIVE_DISK_288, 36, 80, 1, "2.88 MB 3\"1/2", },
-    { FDRIVE_DRV_288, FDRIVE_DISK_288, 39, 80, 1, "3.12 MB 3\"1/2", },
-    { FDRIVE_DRV_288, FDRIVE_DISK_288, 40, 80, 1,  "3.2 MB 3\"1/2", },
-    { FDRIVE_DRV_288, FDRIVE_DISK_288, 44, 80, 1, "3.52 MB 3\"1/2", },
-    { FDRIVE_DRV_288, FDRIVE_DISK_288, 48, 80, 1, "3.84 MB 3\"1/2", },
-    /* 720 kB 3"1/2 floppy disks */
-    { FDRIVE_DRV_144, FDRIVE_DISK_720,  9, 80, 1,  "720 kB 3\"1/2", },
-    { FDRIVE_DRV_144, FDRIVE_DISK_720, 10, 80, 1,  "800 kB 3\"1/2", },
-    { FDRIVE_DRV_144, FDRIVE_DISK_720, 10, 82, 1,  "820 kB 3\"1/2", },
-    { FDRIVE_DRV_144, FDRIVE_DISK_720, 10, 83, 1,  "830 kB 3\"1/2", },
-    { FDRIVE_DRV_144, FDRIVE_DISK_720, 13, 80, 1, "1.04 MB 3\"1/2", },
-    { FDRIVE_DRV_144, FDRIVE_DISK_720, 14, 80, 1, "1.12 MB 3\"1/2", },
-    /* 1.2 MB 5"1/4 floppy disks */
-    { FDRIVE_DRV_120, FDRIVE_DISK_288, 15, 80, 1,  "1.2 kB 5\"1/4", },
-    { FDRIVE_DRV_120, FDRIVE_DISK_288, 18, 80, 1, "1.44 MB 5\"1/4", },
-    { FDRIVE_DRV_120, FDRIVE_DISK_288, 18, 82, 1, "1.48 MB 5\"1/4", },
-    { FDRIVE_DRV_120, FDRIVE_DISK_288, 18, 83, 1, "1.49 MB 5\"1/4", },
-    { FDRIVE_DRV_120, FDRIVE_DISK_288, 20, 80, 1,  "1.6 MB 5\"1/4", },
-    /* 720 kB 5"1/4 floppy disks */
-    { FDRIVE_DRV_120, FDRIVE_DISK_288,  9, 80, 1,  "720 kB 5\"1/4", },
-    { FDRIVE_DRV_120, FDRIVE_DISK_288, 11, 80, 1,  "880 kB 5\"1/4", },
-    /* 360 kB 5"1/4 floppy disks */
-    { FDRIVE_DRV_120, FDRIVE_DISK_288,  9, 40, 1,  "360 kB 5\"1/4", },
-    { FDRIVE_DRV_120, FDRIVE_DISK_288,  9, 40, 0,  "180 kB 5\"1/4", },
-    { FDRIVE_DRV_120, FDRIVE_DISK_288, 10, 41, 1,  "410 kB 5\"1/4", },
-    { FDRIVE_DRV_120, FDRIVE_DISK_288, 10, 42, 1,  "420 kB 5\"1/4", },
-    /* 320 kB 5"1/4 floppy disks */
-    { FDRIVE_DRV_120, FDRIVE_DISK_288,  8, 40, 1,  "320 kB 5\"1/4", },
-    { FDRIVE_DRV_120, FDRIVE_DISK_288,  8, 40, 0,  "160 kB 5\"1/4", },
-    /* 360 kB must match 5"1/4 better than 3"1/2... */
-    { FDRIVE_DRV_144, FDRIVE_DISK_720,  9, 80, 0,  "360 kB 3\"1/2", },
-    /* end */
-    { FDRIVE_DRV_NONE, FDRIVE_DISK_NONE, -1, -1, 0, NULL, },
-};
-
 /* Revalidate a disk drive after a disk change */
 static void fd_revalidate(FDrive *drv)
 {
-    const FDFormat *parse;
-    uint64_t nb_sectors, size;
-    int i, first_match, match;
     int nb_heads, max_track, last_sect, ro;
+    FDriveType drive;
 
     FLOPPY_DPRINTF("revalidate\n");
     if (drv->bs != NULL && bdrv_is_inserted(drv->bs)) {
         ro = bdrv_is_read_only(drv->bs);
-        bdrv_get_geometry_hint(drv->bs, &nb_heads, &max_track, &last_sect);
+        bdrv_get_floppy_geometry_hint(drv->bs, &nb_heads, &max_track,
+                                      &last_sect, drv->drive, &drive);
         if (nb_heads != 0 && max_track != 0 && last_sect != 0) {
             FLOPPY_DPRINTF("User defined disk (%d %d %d)",
                            nb_heads - 1, max_track, last_sect);
         } else {
-            bdrv_get_geometry(drv->bs, &nb_sectors);
-            match = -1;
-            first_match = -1;
-            for (i = 0;; i++) {
-                parse = &fd_formats[i];
-                if (parse->drive == FDRIVE_DRV_NONE)
-                    break;
-                if (drv->drive == parse->drive ||
-                    drv->drive == FDRIVE_DRV_NONE) {
-                    size = (parse->max_head + 1) * parse->max_track *
-                        parse->last_sect;
-                    if (nb_sectors == size) {
-                        match = i;
-                        break;
-                    }
-                    if (first_match == -1)
-                        first_match = i;
-                }
-            }
-            if (match == -1) {
-                if (first_match == -1)
-                    match = 1;
-                else
-                    match = first_match;
-                parse = &fd_formats[match];
-            }
-            nb_heads = parse->max_head + 1;
-            max_track = parse->max_track;
-            last_sect = parse->last_sect;
-            drv->drive = parse->drive;
-            FLOPPY_DPRINTF("%s floppy disk (%d h %d t %d s) %s\n", parse->str,
-                           nb_heads, max_track, last_sect, ro ? "ro" : "rw");
+            FLOPPY_DPRINTF("Floppy disk (%d h %d t %d s) %s\n", nb_heads,
+                           max_track, last_sect, ro ? "ro" : "rw");
         }
         if (nb_heads == 1) {
             drv->flags &= ~FDISK_DBL_SIDES;
@@ -292,6 +191,7 @@ static void fd_revalidate(FDrive *drv)
         drv->max_track = max_track;
         drv->last_sect = last_sect;
         drv->ro = ro;
+        drv->drive = drive;
     } else {
         FLOPPY_DPRINTF("No disk in drive\n");
         drv->last_sect = 0;
@@ -302,6 +202,8 @@ static void fd_revalidate(FDrive *drv)
 
 /********************************************************/
 /* Intel 82078 floppy disk controller emulation          */
+
+typedef struct FDCtrl FDCtrl;
 
 static void fdctrl_reset(FDCtrl *fdctrl, int do_irq);
 static void fdctrl_reset_fifo(FDCtrl *fdctrl);
@@ -370,9 +272,9 @@ enum {
     FD_CMD_PART_ID = 0x18,
     FD_CMD_SCAN_LOW_OR_EQUAL = 0x19,
     FD_CMD_SCAN_HIGH_OR_EQUAL = 0x1d,
-    FD_CMD_SAVE = 0x2c,
+    FD_CMD_SAVE = 0x2e,
     FD_CMD_OPTION = 0x33,
-    FD_CMD_RESTORE = 0x4c,
+    FD_CMD_RESTORE = 0x4e,
     FD_CMD_DRIVE_SPECIFICATION_COMMAND = 0x8e,
     FD_CMD_RELATIVE_SEEK_OUT = 0x8f,
     FD_CMD_FORMAT_AND_WRITE = 0xcd,
@@ -524,6 +426,8 @@ typedef struct FDCtrlSysBus {
 typedef struct FDCtrlISABus {
     ISADevice busdev;
     struct FDCtrl state;
+    int32_t bootindexA;
+    int32_t bootindexB;
 } FDCtrlISABus;
 
 static uint32_t fdctrl_read (void *opaque, uint32_t reg)
@@ -631,16 +535,63 @@ static CPUWriteMemoryFunc * const fdctrl_mem_write_strict[3] = {
     NULL,
 };
 
+static void fdrive_media_changed_pre_save(void *opaque)
+{
+    FDrive *drive = opaque;
+
+    drive->media_changed = drive->bs->media_changed;
+}
+
+static int fdrive_media_changed_post_load(void *opaque, int version_id)
+{
+    FDrive *drive = opaque;
+
+    if (drive->bs != NULL) {
+        drive->bs->media_changed = drive->media_changed;
+    }
+
+    /* User ejected the floppy when drive->bs == NULL */
+    return 0;
+}
+
+static bool fdrive_media_changed_needed(void *opaque)
+{
+    FDrive *drive = opaque;
+
+    return (drive->bs != NULL && drive->bs->media_changed != 1);
+}
+
+static const VMStateDescription vmstate_fdrive_media_changed = {
+    .name = "fdrive/media_changed",
+    .version_id = 1,
+    .minimum_version_id = 1,
+    .minimum_version_id_old = 1,
+    .pre_save = fdrive_media_changed_pre_save,
+    .post_load = fdrive_media_changed_post_load,
+    .fields      = (VMStateField[]) {
+        VMSTATE_UINT8(media_changed, FDrive),
+        VMSTATE_END_OF_LIST()
+    }
+};
+
 static const VMStateDescription vmstate_fdrive = {
     .name = "fdrive",
     .version_id = 1,
     .minimum_version_id = 1,
     .minimum_version_id_old = 1,
-    .fields      = (VMStateField []) {
+    .fields      = (VMStateField[]) {
         VMSTATE_UINT8(head, FDrive),
         VMSTATE_UINT8(track, FDrive),
         VMSTATE_UINT8(sect, FDrive),
         VMSTATE_END_OF_LIST()
+    },
+    .subsections = (VMStateSubsection[]) {
+        {
+            .vmsd = &vmstate_fdrive_media_changed,
+            .needed = &fdrive_media_changed_needed,
+        } , {
+            /* empty */
+        }
     }
 };
 
@@ -724,12 +675,6 @@ static void fdctrl_handle_tc(void *opaque, int irq, int level)
         // XXX
         FLOPPY_DPRINTF("TC pulsed\n");
     }
-}
-
-/* XXX: may change if moved to bdrv */
-int fdctrl_get_drive_type(FDCtrl *fdctrl, int drive_num)
-{
-    return fdctrl->drives[drive_num].drive;
 }
 
 /* Change IRQ state */
@@ -994,8 +939,9 @@ static uint32_t fdctrl_read_dir(FDCtrl *fdctrl)
 #endif
         )
         retval |= FD_DIR_DSKCHG;
-    if (retval != 0)
+    if (retval != 0) {
         FLOPPY_DPRINTF("Floppy digital input register: 0x%02x\n", retval);
+    }
 
     return retval;
 }
@@ -1526,7 +1472,7 @@ static void fdctrl_handle_readid(FDCtrl *fdctrl, int direction)
     /* XXX: should set main status register to busy */
     cur_drv->head = (fdctrl->fifo[1] >> 2) & 1;
     qemu_mod_timer(fdctrl->result_timer,
-                   qemu_get_clock(vm_clock) + (get_ticks_per_sec() / 50));
+                   qemu_get_clock_ns(vm_clock) + (get_ticks_per_sec() / 50));
 }
 
 static void fdctrl_handle_format_track(FDCtrl *fdctrl, int direction)
@@ -1846,34 +1792,36 @@ static void fdctrl_result_timer(void *opaque)
 }
 
 /* Init functions */
-static void fdctrl_connect_drives(FDCtrl *fdctrl)
+static int fdctrl_connect_drives(FDCtrl *fdctrl)
 {
     unsigned int i;
+    FDrive *drive;
 
     for (i = 0; i < MAX_FD; i++) {
-        fd_init(&fdctrl->drives[i]);
-        fd_revalidate(&fdctrl->drives[i]);
+        drive = &fdctrl->drives[i];
+
+        if (drive->bs) {
+            if (bdrv_get_on_error(drive->bs, 0) != BLOCK_ERR_STOP_ENOSPC) {
+                error_report("fdc doesn't support drive option werror");
+                return -1;
+            }
+            if (bdrv_get_on_error(drive->bs, 1) != BLOCK_ERR_REPORT) {
+                error_report("fdc doesn't support drive option rerror");
+                return -1;
+            }
+        }
+
+        fd_init(drive);
+        fd_revalidate(drive);
+        if (drive->bs) {
+            bdrv_set_removable(drive->bs, 1);
+        }
     }
+    return 0;
 }
 
-FDCtrl *fdctrl_init_isa(DriveInfo **fds)
-{
-    ISADevice *dev;
-
-    dev = isa_create("isa-fdc");
-    if (fds[0]) {
-        qdev_prop_set_drive(&dev->qdev, "driveA", fds[0]);
-    }
-    if (fds[1]) {
-        qdev_prop_set_drive(&dev->qdev, "driveB", fds[1]);
-    }
-    if (qdev_init(&dev->qdev) < 0)
-        return NULL;
-    return &(DO_UPCAST(FDCtrlISABus, busdev, dev)->state);
-}
-
-FDCtrl *fdctrl_init_sysbus(qemu_irq irq, int dma_chann,
-                           target_phys_addr_t mmio_base, DriveInfo **fds)
+void fdctrl_init_sysbus(qemu_irq irq, int dma_chann,
+                        target_phys_addr_t mmio_base, DriveInfo **fds)
 {
     FDCtrl *fdctrl;
     DeviceState *dev;
@@ -1884,40 +1832,34 @@ FDCtrl *fdctrl_init_sysbus(qemu_irq irq, int dma_chann,
     fdctrl = &sys->state;
     fdctrl->dma_chann = dma_chann; /* FIXME */
     if (fds[0]) {
-        qdev_prop_set_drive(dev, "driveA", fds[0]);
+        qdev_prop_set_drive_nofail(dev, "driveA", fds[0]->bdrv);
     }
     if (fds[1]) {
-        qdev_prop_set_drive(dev, "driveB", fds[1]);
+        qdev_prop_set_drive_nofail(dev, "driveB", fds[1]->bdrv);
     }
     qdev_init_nofail(dev);
     sysbus_connect_irq(&sys->busdev, 0, irq);
     sysbus_mmio_map(&sys->busdev, 0, mmio_base);
-
-    return fdctrl;
 }
 
-FDCtrl *sun4m_fdctrl_init(qemu_irq irq, target_phys_addr_t io_base,
-                          DriveInfo **fds, qemu_irq *fdc_tc)
+void sun4m_fdctrl_init(qemu_irq irq, target_phys_addr_t io_base,
+                       DriveInfo **fds, qemu_irq *fdc_tc)
 {
     DeviceState *dev;
     FDCtrlSysBus *sys;
-    FDCtrl *fdctrl;
 
     dev = qdev_create(NULL, "SUNW,fdtwo");
     if (fds[0]) {
-        qdev_prop_set_drive(dev, "drive", fds[0]);
+        qdev_prop_set_drive_nofail(dev, "drive", fds[0]->bdrv);
     }
     qdev_init_nofail(dev);
     sys = DO_UPCAST(FDCtrlSysBus, busdev.qdev, dev);
-    fdctrl = &sys->state;
     sysbus_connect_irq(&sys->busdev, 0, irq);
     sysbus_mmio_map(&sys->busdev, 0, io_base);
     *fdc_tc = qdev_get_gpio_in(dev, 0);
-
-    return fdctrl;
 }
 
-static int fdctrl_init_common(FDCtrl *fdctrl, target_phys_addr_t io_base)
+static int fdctrl_init_common(FDCtrl *fdctrl)
 {
     int i, j;
     static int command_tables_inited = 0;
@@ -1937,7 +1879,7 @@ static int fdctrl_init_common(FDCtrl *fdctrl, target_phys_addr_t io_base)
     FLOPPY_DPRINTF("init controller\n");
     fdctrl->fifo = qemu_memalign(512, FD_SECTOR_LEN);
     fdctrl->fifo_size = 512;
-    fdctrl->result_timer = qemu_new_timer(vm_clock,
+    fdctrl->result_timer = qemu_new_timer_ns(vm_clock,
                                           fdctrl_result_timer, fdctrl);
 
     fdctrl->version = 0x90; /* Intel 82078 controller */
@@ -1946,10 +1888,7 @@ static int fdctrl_init_common(FDCtrl *fdctrl, target_phys_addr_t io_base)
 
     if (fdctrl->dma_chann != -1)
         DMA_register_channel(fdctrl->dma_chann, &fdctrl_transfer_handler, fdctrl);
-    fdctrl_connect_drives(fdctrl);
-
-    vmstate_register(io_base, &vmstate_fdc, fdctrl);
-    return 0;
+    return fdctrl_connect_drives(fdctrl);
 }
 
 static int isabus_fdc_init1(ISADevice *dev)
@@ -1969,10 +1908,17 @@ static int isabus_fdc_init1(ISADevice *dev)
                           &fdctrl_write_port, fdctrl);
     register_ioport_write(iobase + 0x07, 1, 1,
                           &fdctrl_write_port, fdctrl);
+    isa_init_ioport_range(dev, iobase, 6);
+    isa_init_ioport(dev, iobase + 7);
+
     isa_init_irq(&isa->busdev, &fdctrl->irq, isairq);
     fdctrl->dma_chann = dma_chann;
 
-    ret = fdctrl_init_common(fdctrl, iobase);
+    qdev_set_legacy_instance_id(&dev->qdev, iobase, 2);
+    ret = fdctrl_init_common(fdctrl);
+
+    add_boot_device_path(isa->bootindexA, &dev->qdev, "/floppy@0");
+    add_boot_device_path(isa->bootindexB, &dev->qdev, "/floppy@1");
 
     return ret;
 }
@@ -1984,13 +1930,15 @@ static int sysbus_fdc_init1(SysBusDevice *dev)
     int io;
     int ret;
 
-    io = cpu_register_io_memory(fdctrl_mem_read, fdctrl_mem_write, fdctrl);
+    io = cpu_register_io_memory(fdctrl_mem_read, fdctrl_mem_write, fdctrl,
+                                DEVICE_NATIVE_ENDIAN);
     sysbus_init_mmio(dev, 0x08, io);
     sysbus_init_irq(dev, &fdctrl->irq);
     qdev_init_gpio_in(&dev->qdev, fdctrl_handle_tc, 1);
     fdctrl->dma_chann = -1;
 
-    ret = fdctrl_init_common(fdctrl, io);
+    qdev_set_legacy_instance_id(&dev->qdev, io, 2);
+    ret = fdctrl_init_common(fdctrl);
 
     return ret;
 }
@@ -2001,36 +1949,63 @@ static int sun4m_fdc_init1(SysBusDevice *dev)
     int io;
 
     io = cpu_register_io_memory(fdctrl_mem_read_strict,
-                                fdctrl_mem_write_strict, fdctrl);
+                                fdctrl_mem_write_strict, fdctrl,
+                                DEVICE_NATIVE_ENDIAN);
     sysbus_init_mmio(dev, 0x08, io);
     sysbus_init_irq(dev, &fdctrl->irq);
     qdev_init_gpio_in(&dev->qdev, fdctrl_handle_tc, 1);
 
     fdctrl->sun4m = 1;
-    return fdctrl_init_common(fdctrl, io);
+    qdev_set_legacy_instance_id(&dev->qdev, io, 2);
+    return fdctrl_init_common(fdctrl);
 }
+
+static const VMStateDescription vmstate_isa_fdc ={
+    .name = "fdc",
+    .version_id = 2,
+    .minimum_version_id = 2,
+    .fields = (VMStateField []) {
+        VMSTATE_STRUCT(state, FDCtrlISABus, 0, vmstate_fdc, FDCtrl),
+        VMSTATE_END_OF_LIST()
+    }
+};
 
 static ISADeviceInfo isa_fdc_info = {
     .init = isabus_fdc_init1,
     .qdev.name  = "isa-fdc",
+    .qdev.fw_name  = "fdc",
     .qdev.size  = sizeof(FDCtrlISABus),
     .qdev.no_user = 1,
+    .qdev.vmsd  = &vmstate_isa_fdc,
     .qdev.reset = fdctrl_external_reset_isa,
     .qdev.props = (Property[]) {
-        DEFINE_PROP_DRIVE("driveA", FDCtrlISABus, state.drives[0].dinfo),
-        DEFINE_PROP_DRIVE("driveB", FDCtrlISABus, state.drives[1].dinfo),
+        DEFINE_PROP_DRIVE("driveA", FDCtrlISABus, state.drives[0].bs),
+        DEFINE_PROP_DRIVE("driveB", FDCtrlISABus, state.drives[1].bs),
+        DEFINE_PROP_INT32("bootindexA", FDCtrlISABus, bootindexA, -1),
+        DEFINE_PROP_INT32("bootindexB", FDCtrlISABus, bootindexB, -1),
         DEFINE_PROP_END_OF_LIST(),
     },
+};
+
+static const VMStateDescription vmstate_sysbus_fdc ={
+    .name = "fdc",
+    .version_id = 2,
+    .minimum_version_id = 2,
+    .fields = (VMStateField []) {
+        VMSTATE_STRUCT(state, FDCtrlSysBus, 0, vmstate_fdc, FDCtrl),
+        VMSTATE_END_OF_LIST()
+    }
 };
 
 static SysBusDeviceInfo sysbus_fdc_info = {
     .init = sysbus_fdc_init1,
     .qdev.name  = "sysbus-fdc",
     .qdev.size  = sizeof(FDCtrlSysBus),
+    .qdev.vmsd  = &vmstate_sysbus_fdc,
     .qdev.reset = fdctrl_external_reset_sysbus,
     .qdev.props = (Property[]) {
-        DEFINE_PROP_DRIVE("driveA", FDCtrlSysBus, state.drives[0].dinfo),
-        DEFINE_PROP_DRIVE("driveB", FDCtrlSysBus, state.drives[1].dinfo),
+        DEFINE_PROP_DRIVE("driveA", FDCtrlSysBus, state.drives[0].bs),
+        DEFINE_PROP_DRIVE("driveB", FDCtrlSysBus, state.drives[1].bs),
         DEFINE_PROP_END_OF_LIST(),
     },
 };
@@ -2039,9 +2014,10 @@ static SysBusDeviceInfo sun4m_fdc_info = {
     .init = sun4m_fdc_init1,
     .qdev.name  = "SUNW,fdtwo",
     .qdev.size  = sizeof(FDCtrlSysBus),
+    .qdev.vmsd  = &vmstate_sysbus_fdc,
     .qdev.reset = fdctrl_external_reset_sysbus,
     .qdev.props = (Property[]) {
-        DEFINE_PROP_DRIVE("drive", FDCtrlSysBus, state.drives[0].dinfo),
+        DEFINE_PROP_DRIVE("drive", FDCtrlSysBus, state.drives[0].bs),
         DEFINE_PROP_END_OF_LIST(),
     },
 };

@@ -49,8 +49,7 @@ static inline PCIDevice *pcie_dev_find_by_mmcfg_addr(PCIBus *s,
                                                      uint32_t mmcfg_addr)
 {
     return pci_find_device(s, PCIE_MMCFG_BUS(mmcfg_addr),
-                           PCI_SLOT(PCIE_MMCFG_DEVFN(mmcfg_addr)),
-                           PCI_FUNC(PCIE_MMCFG_DEVFN(mmcfg_addr)));
+                           PCIE_MMCFG_DEVFN(mmcfg_addr));
 }
 
 static void pcie_mmcfg_data_write(PCIBus *s,
@@ -137,7 +136,8 @@ int pcie_host_init(PCIExpressHost *e)
 {
     e->base_addr = PCIE_BASE_ADDR_UNMAPPED;
     e->mmio_index =
-        cpu_register_io_memory(pcie_mmcfg_read, pcie_mmcfg_write, e);
+        cpu_register_io_memory(pcie_mmcfg_read, pcie_mmcfg_write, e,
+                               DEVICE_NATIVE_ENDIAN);
     if (e->mmio_index < 0) {
         return -1;
     }

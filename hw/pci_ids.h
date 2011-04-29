@@ -15,6 +15,7 @@
 
 #define PCI_CLASS_STORAGE_SCSI           0x0100
 #define PCI_CLASS_STORAGE_IDE            0x0101
+#define PCI_CLASS_STORAGE_SATA           0x0106
 #define PCI_CLASS_STORAGE_OTHER          0x0180
 
 #define PCI_CLASS_NETWORK_ETHERNET       0x0200
@@ -57,6 +58,8 @@
 #define PCI_VENDOR_ID_AMD                0x1022
 #define PCI_DEVICE_ID_AMD_LANCE          0x2000
 
+#define PCI_VENDOR_ID_TI                 0x104c
+
 #define PCI_VENDOR_ID_MOTOROLA           0x1057
 #define PCI_DEVICE_ID_MOTOROLA_MPC106    0x0002
 #define PCI_DEVICE_ID_MOTOROLA_RAVEN     0x4801
@@ -77,6 +80,14 @@
 #define PCI_DEVICE_ID_REALTEK_8139       0x8139
 
 #define PCI_VENDOR_ID_XILINX             0x10ee
+
+#define PCI_VENDOR_ID_VIA                0x1106
+#define PCI_DEVICE_ID_VIA_ISA_BRIDGE     0x0686
+#define PCI_DEVICE_ID_VIA_IDE            0x0571
+#define PCI_DEVICE_ID_VIA_UHCI           0x3038
+#define PCI_DEVICE_ID_VIA_ACPI           0x3057
+#define PCI_DEVICE_ID_VIA_AC97           0x3058
+#define PCI_DEVICE_ID_VIA_MC97           0x3068
 
 #define PCI_VENDOR_ID_MARVELL            0x11ab
 

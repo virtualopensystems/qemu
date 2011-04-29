@@ -990,9 +990,8 @@ const struct ia64_operand elf64_ia64_operands[IA64_OPND_COUNT] =
    the GNU General Public License for more details.
 
    You should have received a copy of the GNU General Public License
-   along with this file; see the file COPYING.  If not, write to the
-   Free Software Foundation, 51 Franklin Street - Fifth Floor, Boston, MA
-   02110-1301, USA.  */
+   along with this file; see the file COPYING.  If not, see
+   <http://www.gnu.org/licenses/>. */
 
 /* The primary opcode table is made up of the following: */
 struct ia64_main_table
@@ -9906,9 +9905,8 @@ static const struct ia64_dis_names ia64_dis_names[] = {
    the GNU General Public License for more details.
 
    You should have received a copy of the GNU General Public License
-   along with this file; see the file COPYING.  If not, write to the
-   Free Software Foundation, 51 Franklin Street - Fifth Floor, Boston, MA
-   02110-1301, USA.  */
+   along with this file; see the file COPYING.  If not, see
+   <http://www.gnu.org/licenses/>. */
 
 static const struct ia64_templ_desc ia64_templ_desc[16] =
   {
@@ -10562,11 +10560,14 @@ print_insn_ia64 (bfd_vma memaddr, struct disassemble_info *info)
 	    if (str)
 	      (*info->fprintf_func) (info->stream, "%s", str);
 	    else if (odesc->flags & IA64_OPND_FLAG_DECIMAL_SIGNED)
-	      (*info->fprintf_func) (info->stream, "%lld", (long long) value);
+              (*info->fprintf_func) (info->stream, "%" PRId64,
+                                     (int64_t) value);
 	    else if (odesc->flags & IA64_OPND_FLAG_DECIMAL_UNSIGNED)
-	      (*info->fprintf_func) (info->stream, "%llu", (long long) value);
+              (*info->fprintf_func) (info->stream, "%" PRIu64,
+                                     (uint64_t) value);
 	    else
-	      (*info->fprintf_func) (info->stream, "0x%llx", (long long) value);
+              (*info->fprintf_func) (info->stream, "0x%" PRIx64,
+                                     (uint64_t) value);
 	    break;
 
 	  case IA64_OPND_CLASS_REL:

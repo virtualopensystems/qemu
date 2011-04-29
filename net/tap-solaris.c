@@ -38,6 +38,7 @@
 #include <net/if.h>
 #include <syslog.h>
 #include <stropts.h>
+#include "qemu-error.h"
 
 ssize_t tap_read_packet(int tapfd, uint8_t *buf, int maxlen)
 {
@@ -209,6 +210,15 @@ int tap_probe_vnet_hdr(int fd)
 int tap_probe_has_ufo(int fd)
 {
     return 0;
+}
+
+int tap_probe_vnet_hdr_len(int fd, int len)
+{
+    return 0;
+}
+
+void tap_fd_set_vnet_hdr_len(int fd, int len)
+{
 }
 
 void tap_fd_set_offload(int fd, int csum, int tso4,

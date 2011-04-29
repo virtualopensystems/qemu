@@ -480,7 +480,7 @@ static int tap_win32_write(tap_win32_overlapped_t *overlapped,
         }
     }
 
-    return 0;
+    return write_size;
 }
 
 static DWORD WINAPI tap_win32_thread_entry(LPVOID param)
@@ -579,7 +579,6 @@ static int tap_win32_open(tap_win32_overlapped_t **phandle,
     } version;
     DWORD version_len;
     DWORD idThread;
-    HANDLE hThread;
 
     if (prefered_name != NULL)
         snprintf(name_buffer, sizeof(name_buffer), "%s", prefered_name);
@@ -623,8 +622,8 @@ static int tap_win32_open(tap_win32_overlapped_t **phandle,
 
     *phandle = &tap_overlapped;
 
-    hThread = CreateThread(NULL, 0, tap_win32_thread_entry,
-                           (LPVOID)&tap_overlapped, 0, &idThread);
+    CreateThread(NULL, 0, tap_win32_thread_entry,
+                 (LPVOID)&tap_overlapped, 0, &idThread);
     return 0;
 }
 
@@ -726,6 +725,15 @@ int tap_has_ufo(VLANClientState *vc)
 int tap_has_vnet_hdr(VLANClientState *vc)
 {
     return 0;
+}
+
+int tap_probe_vnet_hdr_len(int fd, int len)
+{
+    return 0;
+}
+
+void tap_fd_set_vnet_hdr_len(int fd, int len)
+{
 }
 
 void tap_using_vnet_hdr(VLANClientState *vc, int using_vnet_hdr)

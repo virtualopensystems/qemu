@@ -37,6 +37,7 @@
 #include "ide.h"
 #include "loader.h"
 #include "elf.h"
+#include "blockdev.h"
 
 //#define DEBUG_IRQ
 //#define DEBUG_EBUS
@@ -70,7 +71,7 @@
 #define PROM_VADDR           0x000ffd00000ULL
 #define APB_SPECIAL_BASE     0x1fe00000000ULL
 #define APB_MEM_BASE         0x1ff00000000ULL
-#define VGA_BASE             (APB_MEM_BASE + 0x400000ULL)
+#define APB_PCI_IO_BASE      (APB_SPECIAL_BASE + 0x02000000ULL)
 #define PROM_FILENAME        "openbios-sparc64"
 #define NVRAM_SIZE           0x2000
 #define MAX_IDE_BUS          2
@@ -105,7 +106,11 @@ int DMA_write_memory (int nchan, void *buf, int pos, int size)
 void DMA_hold_DREQ (int nchan) {}
 void DMA_release_DREQ (int nchan) {}
 void DMA_schedule(int nchan) {}
-void DMA_init (int high_page_enable) {}
+
+void DMA_init(int high_page_enable, qemu_irq *cpu_request_exit)
+{
+}
+
 void DMA_register_channel (int nchan,
                            DMA_transfer_handler transfer_handler,
                            void *opaque)
@@ -293,6 +298,7 @@ static void cpu_kick_irq(CPUState *env)
 {
     env->halted = 0;
     cpu_check_irqs(env);
+    qemu_cpu_kick(env);
 }
 
 static void cpu_set_irq(void *opaque, int irq, int level)
@@ -301,9 +307,8 @@ static void cpu_set_irq(void *opaque, int irq, int level)
 
     if (level) {
         CPUIRQ_DPRINTF("Raise CPU IRQ %d\n", irq);
-        env->halted = 0;
         env->pil_in |= 1 << irq;
-        cpu_check_irqs(env);
+        cpu_kick_irq(env);
     } else {
         CPUIRQ_DPRINTF("Lower CPU IRQ %d\n", irq);
         env->pil_in &= ~(1 << irq);
@@ -347,9 +352,9 @@ static CPUTimer* cpu_timer_create(const char* name, CPUState *env,
     timer->disabled_mask = disabled_mask;
 
     timer->disabled = 1;
-    timer->clock_offset = qemu_get_clock(vm_clock);
+    timer->clock_offset = qemu_get_clock_ns(vm_clock);
 
-    timer->qtimer = qemu_new_timer(vm_clock, cb, env);
+    timer->qtimer = qemu_new_timer_ns(vm_clock, cb, env);
 
     return timer;
 }
@@ -357,7 +362,7 @@ static CPUTimer* cpu_timer_create(const char* name, CPUState *env,
 static void cpu_timer_reset(CPUTimer *timer)
 {
     timer->disabled = 1;
-    timer->clock_offset = qemu_get_clock(vm_clock);
+    timer->clock_offset = qemu_get_clock_ns(vm_clock);
 
     qemu_del_timer(timer->qtimer);
 }
@@ -452,7 +457,7 @@ void cpu_tick_set_count(CPUTimer *timer, uint64_t count)
     uint64_t real_count = count & ~timer->disabled_mask;
     uint64_t disabled_bit = count & timer->disabled_mask;
 
-    int64_t vm_clock_offset = qemu_get_clock(vm_clock) -
+    int64_t vm_clock_offset = qemu_get_clock_ns(vm_clock) -
                     cpu_to_timer_ticks(real_count, timer->frequency);
 
     TIMER_DPRINTF("%s set_count count=0x%016lx (%s) p=%p\n",
@@ -466,7 +471,7 @@ void cpu_tick_set_count(CPUTimer *timer, uint64_t count)
 uint64_t cpu_tick_get_count(CPUTimer *timer)
 {
     uint64_t real_count = timer_to_cpu_ticks(
-                    qemu_get_clock(vm_clock) - timer->clock_offset,
+                    qemu_get_clock_ns(vm_clock) - timer->clock_offset,
                     timer->frequency);
 
     TIMER_DPRINTF("%s get_count count=0x%016lx (%s) p=%p\n",
@@ -481,7 +486,7 @@ uint64_t cpu_tick_get_count(CPUTimer *timer)
 
 void cpu_tick_set_limit(CPUTimer *timer, uint64_t limit)
 {
-    int64_t now = qemu_get_clock(vm_clock);
+    int64_t now = qemu_get_clock_ns(vm_clock);
 
     uint64_t real_limit = limit & ~timer->disabled_mask;
     timer->disabled = (limit & timer->disabled_mask) ? 1 : 0;
@@ -520,10 +525,10 @@ static void ebus_mmio_mapfunc(PCIDevice *pci_dev, int region_num,
                  region_num, addr);
     switch (region_num) {
     case 0:
-        isa_mmio_init(addr, 0x1000000, 1);
+        isa_mmio_init(addr, 0x1000000);
         break;
     case 1:
-        isa_mmio_init(addr, 0x800000, 1);
+        isa_mmio_init(addr, 0x800000);
         break;
     }
 }
@@ -558,7 +563,6 @@ pci_ebus_init1(PCIDevice *s)
     s->config[0x09] = 0x00; // programming i/f
     pci_config_set_class(s->config, PCI_CLASS_BRIDGE_OTHER);
     s->config[0x0D] = 0x0a; // latency_timer
-    s->config[PCI_HEADER_TYPE] = PCI_HEADER_TYPE_NORMAL; // header_type
 
     pci_register_bar(s, 0, 0x1000000, PCI_BASE_ADDRESS_SPACE_MEMORY,
                            ebus_mmio_mapfunc);
@@ -625,7 +629,7 @@ static int prom_init1(SysBusDevice *dev)
 {
     ram_addr_t prom_offset;
 
-    prom_offset = qemu_ram_alloc(PROM_SIZE_MAX);
+    prom_offset = qemu_ram_alloc(NULL, "sun4u.prom", PROM_SIZE_MAX);
     sysbus_init_mmio(dev, PROM_SIZE_MAX, prom_offset | IO_MEM_ROM);
     return 0;
 }
@@ -661,7 +665,7 @@ static int ram_init1(SysBusDevice *dev)
 
     RAM_size = d->size;
 
-    ram_offset = qemu_ram_alloc(RAM_size);
+    ram_offset = qemu_ram_alloc(NULL, "sun4u.ram", RAM_size);
     sysbus_init_mmio(dev, RAM_size, ram_offset);
     return 0;
 }
@@ -762,8 +766,8 @@ static void sun4uv_init(ram_addr_t RAM_size,
     irq = qemu_allocate_irqs(cpu_set_irq, env, MAX_PILS);
     pci_bus = pci_apb_init(APB_SPECIAL_BASE, APB_MEM_BASE, irq, &pci_bus2,
                            &pci_bus3);
-    isa_mem_base = VGA_BASE;
-    pci_vga_init(pci_bus, 0, 0);
+    isa_mem_base = APB_PCI_IO_BASE;
+    pci_vga_init(pci_bus);
 
     // XXX Should be pci_bus3
     pci_ebus_init(pci_bus, -1);
@@ -789,14 +793,7 @@ static void sun4uv_init(ram_addr_t RAM_size,
     for(i = 0; i < nb_nics; i++)
         pci_nic_init_nofail(&nd_table[i], "ne2k_pci", NULL);
 
-    if (drive_get_max_bus(IF_IDE) >= MAX_IDE_BUS) {
-        fprintf(stderr, "qemu: too many IDE bus\n");
-        exit(1);
-    }
-    for(i = 0; i < MAX_IDE_BUS * MAX_IDE_DEVS; i++) {
-        hd[i] = drive_get(IF_IDE, i / MAX_IDE_DEVS,
-                          i % MAX_IDE_DEVS);
-    }
+    ide_drive_get(hd, MAX_IDE_BUS);
 
     pci_cmd646_ide_init(pci_bus, hd, 1);
 
@@ -855,7 +852,7 @@ enum {
 static const struct hwdef hwdefs[] = {
     /* Sun4u generic PC-like machine */
     {
-        .default_cpu_model = "TI UltraSparc II",
+        .default_cpu_model = "TI UltraSparc IIi",
         .machine_id = sun4u_id,
         .prom_addr = 0x1fff0000000ULL,
         .console_serial_base = 0,

@@ -198,7 +198,7 @@ static int mpc85xx_pci_map_irq(PCIDevice *pci_dev, int irq_num)
             ret = (irq_num + devno - 0x10) % 4;
             break;
         default:
-            printf("Error:%s:unknow dev number\n", __func__);
+            printf("Error:%s:unknown dev number\n", __func__);
     }
 
     pci_debug("%s: devfn %x irq %d -> %d  devno:%x\n", __func__,
@@ -216,56 +216,49 @@ static void mpc85xx_pci_set_irq(void *opaque, int irq_num, int level)
     qemu_set_irq(pic[irq_num], level);
 }
 
-static void ppce500_pci_save(QEMUFile *f, void *opaque)
-{
-    PPCE500PCIState *controller = opaque;
-    int i;
-
-    pci_device_save(controller->pci_dev, f);
-
-    for (i = 0; i < PPCE500_PCI_NR_POBS; i++) {
-        qemu_put_be32s(f, &controller->pob[i].potar);
-        qemu_put_be32s(f, &controller->pob[i].potear);
-        qemu_put_be32s(f, &controller->pob[i].powbar);
-        qemu_put_be32s(f, &controller->pob[i].powar);
+static const VMStateDescription vmstate_pci_outbound = {
+    .name = "pci_outbound",
+    .version_id = 0,
+    .minimum_version_id = 0,
+    .minimum_version_id_old = 0,
+    .fields      = (VMStateField[]) {
+        VMSTATE_UINT32(potar, struct pci_outbound),
+        VMSTATE_UINT32(potear, struct pci_outbound),
+        VMSTATE_UINT32(powbar, struct pci_outbound),
+        VMSTATE_UINT32(powar, struct pci_outbound),
+        VMSTATE_END_OF_LIST()
     }
+};
 
-    for (i = 0; i < PPCE500_PCI_NR_PIBS; i++) {
-        qemu_put_be32s(f, &controller->pib[i].pitar);
-        qemu_put_be32s(f, &controller->pib[i].piwbar);
-        qemu_put_be32s(f, &controller->pib[i].piwbear);
-        qemu_put_be32s(f, &controller->pib[i].piwar);
+static const VMStateDescription vmstate_pci_inbound = {
+    .name = "pci_inbound",
+    .version_id = 0,
+    .minimum_version_id = 0,
+    .minimum_version_id_old = 0,
+    .fields      = (VMStateField[]) {
+        VMSTATE_UINT32(pitar, struct pci_inbound),
+        VMSTATE_UINT32(piwbar, struct pci_inbound),
+        VMSTATE_UINT32(piwbear, struct pci_inbound),
+        VMSTATE_UINT32(piwar, struct pci_inbound),
+        VMSTATE_END_OF_LIST()
     }
-    qemu_put_be32s(f, &controller->gasket_time);
-}
+};
 
-static int ppce500_pci_load(QEMUFile *f, void *opaque, int version_id)
-{
-    PPCE500PCIState *controller = opaque;
-    int i;
-
-    if (version_id != 1)
-        return -EINVAL;
-
-    pci_device_load(controller->pci_dev, f);
-
-    for (i = 0; i < PPCE500_PCI_NR_POBS; i++) {
-        qemu_get_be32s(f, &controller->pob[i].potar);
-        qemu_get_be32s(f, &controller->pob[i].potear);
-        qemu_get_be32s(f, &controller->pob[i].powbar);
-        qemu_get_be32s(f, &controller->pob[i].powar);
+static const VMStateDescription vmstate_ppce500_pci = {
+    .name = "ppce500_pci",
+    .version_id = 1,
+    .minimum_version_id = 1,
+    .minimum_version_id_old = 1,
+    .fields      = (VMStateField[]) {
+        VMSTATE_PCI_DEVICE_POINTER(pci_dev, PPCE500PCIState),
+        VMSTATE_STRUCT_ARRAY(pob, PPCE500PCIState, PPCE500_PCI_NR_POBS, 1,
+                             vmstate_pci_outbound, struct pci_outbound),
+        VMSTATE_STRUCT_ARRAY(pib, PPCE500PCIState, PPCE500_PCI_NR_PIBS, 1,
+                             vmstate_pci_outbound, struct pci_inbound),
+        VMSTATE_UINT32(gasket_time, PPCE500PCIState),
+        VMSTATE_END_OF_LIST()
     }
-
-    for (i = 0; i < PPCE500_PCI_NR_PIBS; i++) {
-        qemu_get_be32s(f, &controller->pib[i].pitar);
-        qemu_get_be32s(f, &controller->pib[i].piwbar);
-        qemu_get_be32s(f, &controller->pib[i].piwbear);
-        qemu_get_be32s(f, &controller->pib[i].piwar);
-    }
-    qemu_get_be32s(f, &controller->gasket_time);
-
-    return 0;
-}
+};
 
 PCIBus *ppce500_pci_init(qemu_irq pci_irqs[4], target_phys_addr_t registers)
 {
@@ -279,7 +272,8 @@ PCIBus *ppce500_pci_init(qemu_irq pci_irqs[4], target_phys_addr_t registers)
     controller->pci_state.bus = pci_register_bus(NULL, "pci",
                                                  mpc85xx_pci_set_irq,
                                                  mpc85xx_pci_map_irq,
-                                                 pci_irqs, 0x88, 4);
+                                                 pci_irqs, PCI_DEVFN(0x11, 0),
+                                                 4);
     d = pci_register_device(controller->pci_state.bus,
                             "host bridge", sizeof(PCIDevice),
                             0, NULL, NULL);
@@ -291,27 +285,30 @@ PCIBus *ppce500_pci_init(qemu_irq pci_irqs[4], target_phys_addr_t registers)
     controller->pci_dev = d;
 
     /* CFGADDR */
-    index = pci_host_conf_register_mmio(&controller->pci_state, 0);
+    index = pci_host_conf_register_mmio(&controller->pci_state,
+                                        DEVICE_BIG_ENDIAN);
     if (index < 0)
         goto free;
     cpu_register_physical_memory(registers + PCIE500_CFGADDR, 4, index);
 
     /* CFGDATA */
-    index = pci_host_data_register_mmio(&controller->pci_state, 0);
+    index = pci_host_data_register_mmio(&controller->pci_state,
+                                        DEVICE_BIG_ENDIAN);
     if (index < 0)
         goto free;
     cpu_register_physical_memory(registers + PCIE500_CFGDATA, 4, index);
 
     index = cpu_register_io_memory(e500_pci_reg_read,
-                                   e500_pci_reg_write, controller);
+                                   e500_pci_reg_write, controller,
+                                   DEVICE_NATIVE_ENDIAN);
     if (index < 0)
         goto free;
     cpu_register_physical_memory(registers + PCIE500_REG_BASE,
                                    PCIE500_REG_SIZE, index);
 
     /* XXX load/save code not tested. */
-    register_savevm("ppce500_pci", ppce500_pci_id++, 1,
-                    ppce500_pci_save, ppce500_pci_load, controller);
+    vmstate_register(&d->qdev, ppce500_pci_id++, &vmstate_ppce500_pci,
+                     controller);
 
     return controller->pci_state.bus;
 

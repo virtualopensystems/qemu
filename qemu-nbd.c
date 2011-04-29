@@ -44,7 +44,7 @@ static void usage(const char *name)
 "Usage: %s [OPTIONS] FILE\n"
 "QEMU Disk Network Block Device Server\n"
 "\n"
-"  -p, --port=PORT      port to listen on (default `1024')\n"
+"  -p, --port=PORT      port to listen on (default `%d')\n"
 "  -o, --offset=OFFSET  offset into the image\n"
 "  -b, --bind=IFACE     interface to bind to (default `0.0.0.0')\n"
 "  -k, --socket=PATH    path to the unix socket\n"
@@ -62,7 +62,7 @@ static void usage(const char *name)
 "  -V, --version        output version information and exit\n"
 "\n"
 "Report bugs to <anthony@codemonkey.ws>\n"
-    , name, "DEVICE");
+    , name, NBD_DEFAULT_PORT, "DEVICE");
 }
 
 static void version(const char *name)
@@ -112,9 +112,12 @@ static int find_partition(BlockDriverState *bs, int partition,
     uint8_t data[512];
     int i;
     int ext_partnum = 4;
+    int ret;
 
-    if (bdrv_read(bs, 0, data, 1))
-        errx(EXIT_FAILURE, "error while reading");
+    if ((ret = bdrv_read(bs, 0, data, 1)) < 0) {
+        errno = -ret;
+        err(EXIT_FAILURE, "error while reading");
+    }
 
     if (data[510] != 0x55 || data[511] != 0xaa) {
         errno = -EINVAL;
@@ -132,8 +135,10 @@ static int find_partition(BlockDriverState *bs, int partition,
             uint8_t data1[512];
             int j;
 
-            if (bdrv_read(bs, mbr[i].start_sector_abs, data1, 1))
-                errx(EXIT_FAILURE, "error while reading");
+            if ((ret = bdrv_read(bs, mbr[i].start_sector_abs, data1, 1)) < 0) {
+                errno = -ret;
+                err(EXIT_FAILURE, "error while reading");
+            }
 
             for (j = 0; j < 4; j++) {
                 read_partition(&data1[446 + 16 * j], &ext[j]);
@@ -183,7 +188,7 @@ int main(int argc, char **argv)
     bool readonly = false;
     bool disconnect = false;
     const char *bindto = "0.0.0.0";
-    int port = 1024;
+    int port = NBD_DEFAULT_PORT;
     struct sockaddr_in addr;
     socklen_t addr_len = sizeof(addr);
     off_t fd_size;
@@ -225,6 +230,7 @@ int main(int argc, char **argv)
     int nb_fds = 0;
     int max_fd;
     int persistent = 0;
+    uint32_t nbdflags;
 
     while ((ch = getopt_long(argc, argv, sopt, lopt, &opt_ind)) != -1) {
         switch (ch) {
@@ -316,7 +322,7 @@ int main(int argc, char **argv)
     if (disconnect) {
         fd = open(argv[optind], O_RDWR);
         if (fd == -1)
-            errx(EXIT_FAILURE, "Cannot open %s", argv[optind]);
+            err(EXIT_FAILURE, "Cannot open %s", argv[optind]);
 
         nbd_disconnect(fd);
 
@@ -330,26 +336,31 @@ int main(int argc, char **argv)
     bdrv_init();
 
     bs = bdrv_new("hda");
-    if (bs == NULL)
-        return 1;
 
-    if (bdrv_open(bs, argv[optind], flags) < 0)
-        return 1;
+    if ((ret = bdrv_open(bs, argv[optind], flags, NULL)) < 0) {
+        errno = -ret;
+        err(EXIT_FAILURE, "Failed to bdrv_open '%s'", argv[optind]);
+    }
 
     fd_size = bs->total_sectors * 512;
 
     if (partition != -1 &&
         find_partition(bs, partition, &dev_offset, &fd_size))
-        errx(EXIT_FAILURE, "Could not find partition %d", partition);
+        err(EXIT_FAILURE, "Could not find partition %d", partition);
 
     if (device) {
         pid_t pid;
         int sock;
 
+        /* want to fail before daemonizing */
+        if (access(device, R_OK|W_OK) == -1) {
+            err(EXIT_FAILURE, "Could not access '%s'", device);
+        }
+
         if (!verbose) {
             /* detach client and server */
             if (daemon(0, 0) == -1) {
-                errx(EXIT_FAILURE, "Failed to daemonize");
+                err(EXIT_FAILURE, "Failed to daemonize");
             }
         }
 
@@ -372,8 +383,10 @@ int main(int argc, char **argv)
             do {
                 sock = unix_socket_outgoing(socket);
                 if (sock == -1) {
-                    if (errno != ENOENT && errno != ECONNREFUSED)
+                    if (errno != ENOENT && errno != ECONNREFUSED) {
+                        ret = 1;
                         goto out;
+                    }
                     sleep(1);	/* wait children */
                 }
             } while (sock == -1);
@@ -384,7 +397,8 @@ int main(int argc, char **argv)
                 goto out;
             }
 
-            ret = nbd_receive_negotiate(sock, &size, &blocksize);
+            ret = nbd_receive_negotiate(sock, NULL, &nbdflags,
+					&size, &blocksize);
             if (ret == -1) {
                 ret = 1;
                 goto out;
@@ -403,7 +417,10 @@ int main(int argc, char **argv)
 
             show_parts(device);
 
-            nbd_client(fd, sock);
+            ret = nbd_client(fd);
+            if (ret) {
+                ret = 1;
+            }
             close(fd);
  out:
             kill(pid, SIGTERM);
@@ -427,7 +444,7 @@ int main(int argc, char **argv)
     max_fd = sharing_fds[0];
     nb_fds++;
 
-    data = qemu_memalign(512, NBD_BUFFER_SIZE);
+    data = qemu_blockalign(bs, NBD_BUFFER_SIZE);
     if (data == NULL)
         errx(EXIT_FAILURE, "Cannot allocate data buffer");
 

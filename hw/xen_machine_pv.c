@@ -24,10 +24,10 @@
 
 #include "hw.h"
 #include "pc.h"
-#include "sysemu.h"
 #include "boards.h"
 #include "xen_backend.h"
 #include "xen_domainbuild.h"
+#include "blockdev.h"
 
 static void xen_init_pv(ram_addr_t ram_size,
 			const char *boot_device,

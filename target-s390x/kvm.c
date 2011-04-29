@@ -70,7 +70,11 @@
 #define SCLP_CMDW_READ_SCP_INFO         0x00020001
 #define SCLP_CMDW_READ_SCP_INFO_FORCED  0x00120001
 
-int kvm_arch_init(KVMState *s, int smp_cpus)
+const KVMCapabilityInfo kvm_arch_required_capabilities[] = {
+    KVM_CAP_LAST_INFO
+};
+
+int kvm_arch_init(KVMState *s)
 {
     return 0;
 }
@@ -119,7 +123,7 @@ int kvm_arch_put_registers(CPUState *env, int level)
 
 int kvm_arch_get_registers(CPUState *env)
 {
-    uint32_t ret;
+    int ret;
     struct kvm_regs regs;
     int i;
 
@@ -165,18 +169,21 @@ int kvm_arch_remove_sw_breakpoint(CPUState *env, struct kvm_sw_breakpoint *bp)
     return 0;
 }
 
-int kvm_arch_pre_run(CPUState *env, struct kvm_run *run)
+void kvm_arch_pre_run(CPUState *env, struct kvm_run *run)
+{
+}
+
+void kvm_arch_post_run(CPUState *env, struct kvm_run *run)
+{
+}
+
+int kvm_arch_process_async_events(CPUState *env)
 {
     return 0;
 }
 
-int kvm_arch_post_run(CPUState *env, struct kvm_run *run)
-{
-    return 0;
-}
-
-static void kvm_s390_interrupt_internal(CPUState *env, int type, uint32_t parm,
-                                        uint64_t parm64, int vm)
+void kvm_s390_interrupt_internal(CPUState *env, int type, uint32_t parm,
+                                 uint64_t parm64, int vm)
 {
     struct kvm_s390_interrupt kvmint;
     int r;
@@ -187,6 +194,7 @@ static void kvm_s390_interrupt_internal(CPUState *env, int type, uint32_t parm,
 
     env->halted = 0;
     env->exception_index = -1;
+    qemu_cpu_kick(env);
 
     kvmint.type = type;
     kvmint.parm = parm;
@@ -210,7 +218,7 @@ void kvm_s390_virtio_irq(CPUState *env, int config_change, uint64_t token)
                                 token, 1);
 }
 
-static void kvm_s390_interrupt(CPUState *env, int type, uint32_t code)
+void kvm_s390_interrupt(CPUState *env, int type, uint32_t code)
 {
     kvm_s390_interrupt_internal(env, type, code, 0, 0);
 }
@@ -229,7 +237,8 @@ static void setcc(CPUState *env, uint64_t cc)
     env->psw.mask |= (cc & 3) << 44;
 }
 
-static int sclp_service_call(CPUState *env, struct kvm_run *run, uint16_t ipbh0)
+static int kvm_sclp_service_call(CPUState *env, struct kvm_run *run,
+                                 uint16_t ipbh0)
 {
     uint32_t sccb;
     uint64_t code;
@@ -279,7 +288,7 @@ static int handle_priv(CPUState *env, struct kvm_run *run, uint8_t ipa1)
     dprintf("KVM: PRIV: %d\n", ipa1);
     switch (ipa1) {
         case PRIV_SCLP_CALL:
-            r = sclp_service_call(env, run, ipbh0);
+            r = kvm_sclp_service_call(env, run, ipbh0);
             break;
         default:
             dprintf("KVM: unknown PRIV: 0x%x\n", ipa1);
@@ -292,12 +301,10 @@ static int handle_priv(CPUState *env, struct kvm_run *run, uint8_t ipa1)
 
 static int handle_hypercall(CPUState *env, struct kvm_run *run)
 {
-    int r;
-
     cpu_synchronize_state(env);
-    r = s390_virtio_hypercall(env);
+    env->regs[2] = s390_virtio_hypercall(env, env->regs[2], env->regs[1]);
 
-    return r;
+    return 0;
 }
 
 static int handle_diag(CPUState *env, struct kvm_run *run, int ipb_code)
@@ -339,9 +346,20 @@ static int s390_store_status(CPUState *env, uint32_t parameter)
 
 static int s390_cpu_initial_reset(CPUState *env)
 {
-    /* XXX */
-    fprintf(stderr, "XXX SIGP init\n");
-    return -1;
+    int i;
+
+    if (kvm_vcpu_ioctl(env, KVM_S390_INITIAL_RESET, NULL) < 0) {
+        perror("cannot init reset vcpu");
+    }
+
+    /* Manually zero out all registers */
+    cpu_synchronize_state(env);
+    for (i = 0; i < 16; i++) {
+        env->regs[i] = 0;
+    }
+
+    dprintf("DONE: SIGP initial reset: %p\n", env);
+    return 0;
 }
 
 static int handle_sigp(CPUState *env, struct kvm_run *run, uint8_t ipa1)
@@ -422,7 +440,7 @@ static int handle_instruction(CPUState *env, struct kvm_run *run)
     if (r < 0) {
         enter_pgmcheck(env, 0x0001);
     }
-    return r;
+    return 0;
 }
 
 static int handle_intercept(CPUState *env)
@@ -478,5 +496,25 @@ int kvm_arch_handle_exit(CPUState *env, struct kvm_run *run)
             break;
     }
 
+    if (ret == 0) {
+        ret = EXCP_INTERRUPT;
+    } else if (ret > 0) {
+        ret = 0;
+    }
     return ret;
+}
+
+bool kvm_arch_stop_on_emulation_error(CPUState *env)
+{
+    return true;
+}
+
+int kvm_arch_on_sigbus_vcpu(CPUState *env, int code, void *addr)
+{
+    return 1;
+}
+
+int kvm_arch_on_sigbus(int code, void *addr)
+{
+    return 1;
 }

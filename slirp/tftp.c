@@ -92,8 +92,8 @@ static int tftp_session_find(Slirp *slirp, struct tftp_t *tp)
   return -1;
 }
 
-static int tftp_read_data(struct tftp_session *spt, u_int16_t block_nr,
-			  u_int8_t *buf, int len)
+static int tftp_read_data(struct tftp_session *spt, uint16_t block_nr,
+                          uint8_t *buf, int len)
 {
   int fd;
   int bytes_read = 0;
@@ -136,9 +136,9 @@ static int tftp_send_oack(struct tftp_session *spt,
     m->m_data += sizeof(struct udpiphdr);
 
     tp->tp_op = htons(TFTP_OACK);
-    n += snprintf((char *)tp->x.tp_buf + n, sizeof(tp->x.tp_buf) - n, "%s",
+    n += snprintf(tp->x.tp_buf + n, sizeof(tp->x.tp_buf) - n, "%s",
                   key) + 1;
-    n += snprintf((char *)tp->x.tp_buf + n, sizeof(tp->x.tp_buf) - n, "%u",
+    n += snprintf(tp->x.tp_buf + n, sizeof(tp->x.tp_buf) - n, "%u",
                   value) + 1;
 
     saddr.sin_addr = recv_tp->ip.ip_dst;
@@ -155,7 +155,7 @@ static int tftp_send_oack(struct tftp_session *spt,
 }
 
 static void tftp_send_error(struct tftp_session *spt,
-                            u_int16_t errorcode, const char *msg,
+                            uint16_t errorcode, const char *msg,
                             struct tftp_t *recv_tp)
 {
   struct sockaddr_in saddr, daddr;
@@ -194,7 +194,7 @@ out:
 }
 
 static int tftp_send_data(struct tftp_session *spt,
-			  u_int16_t block_nr,
+                          uint16_t block_nr,
 			  struct tftp_t *recv_tp)
 {
   struct sockaddr_in saddr, daddr;
@@ -283,7 +283,7 @@ static void tftp_handle_rrq(Slirp *slirp, struct tftp_t *tp, int pktlen)
 
   /* skip header fields */
   k = 0;
-  pktlen -= ((uint8_t *)&tp->x.tp_buf[0] - (uint8_t *)tp);
+  pktlen -= offsetof(struct tftp_t, x.tp_buf);
 
   /* prepend tftp_prefix */
   prefix_len = strlen(slirp->tftp_prefix);
@@ -299,7 +299,7 @@ static void tftp_handle_rrq(Slirp *slirp, struct tftp_t *tp, int pktlen)
       tftp_send_error(spt, 2, "Access violation", tp);
       return;
     }
-    req_fname[k] = (char)tp->x.tp_buf[k];
+    req_fname[k] = tp->x.tp_buf[k];
     if (req_fname[k++] == '\0') {
       break;
     }
@@ -311,7 +311,7 @@ static void tftp_handle_rrq(Slirp *slirp, struct tftp_t *tp, int pktlen)
     return;
   }
 
-  if (memcmp(&tp->x.tp_buf[k], "octet\0", 6) != 0) {
+  if (strcasecmp(&tp->x.tp_buf[k], "octet") != 0) {
       tftp_send_error(spt, 4, "Unsupported transfer mode", tp);
       return;
   }
@@ -340,7 +340,7 @@ static void tftp_handle_rrq(Slirp *slirp, struct tftp_t *tp, int pktlen)
   while (k < pktlen) {
       const char *key, *value;
 
-      key = (const char *)&tp->x.tp_buf[k];
+      key = &tp->x.tp_buf[k];
       k += strlen(key) + 1;
 
       if (k >= pktlen) {
@@ -348,10 +348,10 @@ static void tftp_handle_rrq(Slirp *slirp, struct tftp_t *tp, int pktlen)
 	  return;
       }
 
-      value = (const char *)&tp->x.tp_buf[k];
+      value = &tp->x.tp_buf[k];
       k += strlen(value) + 1;
 
-      if (strcmp(key, "tsize") == 0) {
+      if (strcasecmp(key, "tsize") == 0) {
 	  int tsize = atoi(value);
 	  struct stat stat_p;
 

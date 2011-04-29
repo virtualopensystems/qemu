@@ -26,7 +26,6 @@
 #include "sysbus.h"
 #include "virtio.h"
 #include "virtio-net.h"
-#include "sysemu.h"
 
 //#define DEBUG_SYBORG_VIRTIO
 
@@ -68,6 +67,7 @@ typedef struct {
     uint32_t id;
     NICConf nic;
     uint32_t host_features;
+    virtio_net_conf net;
 } SyborgVirtIOProxy;
 
 static uint32_t syborg_virtio_readl(void *opaque, target_phys_addr_t offset)
@@ -264,7 +264,8 @@ static int syborg_virtio_init(SyborgVirtIOProxy *proxy, VirtIODevice *vdev)
     proxy->vdev->nvectors = 0;
     sysbus_init_irq(&proxy->busdev, &proxy->irq);
     iomemtype = cpu_register_io_memory(syborg_virtio_readfn,
-                                       syborg_virtio_writefn, proxy);
+                                       syborg_virtio_writefn, proxy,
+                                       DEVICE_NATIVE_ENDIAN);
     sysbus_init_mmio(&proxy->busdev, 0x1000, iomemtype);
 
     proxy->id = ((uint32_t)0x1af4 << 16) | vdev->device_id;
@@ -284,7 +285,7 @@ static int syborg_virtio_net_init(SysBusDevice *dev)
     VirtIODevice *vdev;
     SyborgVirtIOProxy *proxy = FROM_SYSBUS(SyborgVirtIOProxy, dev);
 
-    vdev = virtio_net_init(&dev->qdev, &proxy->nic);
+    vdev = virtio_net_init(&dev->qdev, &proxy->nic, &proxy->net);
     return syborg_virtio_init(proxy, vdev);
 }
 
@@ -295,6 +296,11 @@ static SysBusDeviceInfo syborg_virtio_net_info = {
     .qdev.props = (Property[]) {
         DEFINE_NIC_PROPERTIES(SyborgVirtIOProxy, nic),
         DEFINE_VIRTIO_NET_FEATURES(SyborgVirtIOProxy, host_features),
+        DEFINE_PROP_UINT32("x-txtimer", SyborgVirtIOProxy,
+                           net.txtimer, TX_TIMER_INTERVAL),
+        DEFINE_PROP_INT32("x-txburst", SyborgVirtIOProxy,
+                          net.txburst, TX_BURST),
+        DEFINE_PROP_STRING("tx", SyborgVirtIOProxy, net.tx),
         DEFINE_PROP_END_OF_LIST(),
     }
 };

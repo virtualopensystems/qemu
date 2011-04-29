@@ -36,11 +36,12 @@
 #include "isa.h"
 #include "fw_cfg.h"
 #include "escc.h"
+#include "empty_slot.h"
 #include "qdev-addr.h"
 #include "loader.h"
 #include "elf.h"
-
-//#define DEBUG_IRQ
+#include "blockdev.h"
+#include "trace.h"
 
 /*
  * Sun4m architecture was used in the following machines:
@@ -70,13 +71,6 @@
  * See for example: http://www.sunhelp.org/faq/sunref1.html
  */
 
-#ifdef DEBUG_IRQ
-#define DPRINTF(fmt, ...)                                       \
-    do { printf("CPUIRQ: " fmt , ## __VA_ARGS__); } while (0)
-#else
-#define DPRINTF(fmt, ...)
-#endif
-
 #define KERNEL_LOAD_ADDR     0x00004000
 #define CMDLINE_ADDR         0x007ff000
 #define INITRD_LOAD_ADDR     0x00800000
@@ -88,15 +82,20 @@
 
 #define MAX_CPUS 16
 #define MAX_PILS 16
+#define MAX_VSIMMS 4
 
 #define ESCC_CLOCK 4915200
 
 struct sun4m_hwdef {
-    target_phys_addr_t iommu_base, slavio_base;
+    target_phys_addr_t iommu_base, iommu_pad_base, iommu_pad_len, slavio_base;
     target_phys_addr_t intctl_base, counter_base, nvram_base, ms_kb_base;
     target_phys_addr_t serial_base, fd_base;
     target_phys_addr_t afx_base, idreg_base, dma_base, esp_base, le_base;
     target_phys_addr_t tcx_base, cs_base, apc_base, aux1_base, aux2_base;
+    target_phys_addr_t bpp_base, dbri_base, sx_base;
+    struct {
+        target_phys_addr_t reg_base, vram_base;
+    } vsimm[MAX_VSIMMS];
     target_phys_addr_t ecc_base;
     uint32_t ecc_version;
     uint8_t nvram_machine_id;
@@ -151,7 +150,11 @@ int DMA_write_memory (int nchan, void *buf, int pos, int size)
 void DMA_hold_DREQ (int nchan) {}
 void DMA_release_DREQ (int nchan) {}
 void DMA_schedule(int nchan) {}
-void DMA_init (int high_page_enable) {}
+
+void DMA_init(int high_page_enable, qemu_irq *cpu_request_exit)
+{
+}
+
 void DMA_register_channel (int nchan,
                            DMA_transfer_handler transfer_handler,
                            void *opaque)
@@ -237,17 +240,24 @@ void cpu_check_irqs(CPUState *env)
 
                 env->interrupt_index = TT_EXTINT | i;
                 if (old_interrupt != env->interrupt_index) {
-                    DPRINTF("Set CPU IRQ %d\n", i);
+                    trace_sun4m_cpu_interrupt(i);
                     cpu_interrupt(env, CPU_INTERRUPT_HARD);
                 }
                 break;
             }
         }
     } else if (!env->pil_in && (env->interrupt_index & ~15) == TT_EXTINT) {
-        DPRINTF("Reset CPU IRQ %d\n", env->interrupt_index & 15);
+        trace_sun4m_cpu_reset_interrupt(env->interrupt_index & 15);
         env->interrupt_index = 0;
         cpu_reset_interrupt(env, CPU_INTERRUPT_HARD);
     }
+}
+
+static void cpu_kick_irq(CPUState *env)
+{
+    env->halted = 0;
+    cpu_check_irqs(env);
+    qemu_cpu_kick(env);
 }
 
 static void cpu_set_irq(void *opaque, int irq, int level)
@@ -255,12 +265,11 @@ static void cpu_set_irq(void *opaque, int irq, int level)
     CPUState *env = opaque;
 
     if (level) {
-        DPRINTF("Raise CPU IRQ %d\n", irq);
-        env->halted = 0;
+        trace_sun4m_cpu_set_irq_raise(irq);
         env->pil_in |= 1 << irq;
-        cpu_check_irqs(env);
+        cpu_kick_irq(env);
     } else {
-        DPRINTF("Lower CPU IRQ %d\n", irq);
+        trace_sun4m_cpu_set_irq_lower(irq);
         env->pil_in &= ~(1 << irq);
         cpu_check_irqs(env);
     }
@@ -375,13 +384,14 @@ static void *iommu_init(target_phys_addr_t addr, uint32_t version, qemu_irq irq)
 }
 
 static void *sparc32_dma_init(target_phys_addr_t daddr, qemu_irq parent_irq,
-                              void *iommu, qemu_irq *dev_irq)
+                              void *iommu, qemu_irq *dev_irq, int is_ledma)
 {
     DeviceState *dev;
     SysBusDevice *s;
 
     dev = qdev_create(NULL, "sparc32_dma");
     qdev_prop_set_ptr(dev, "iommu_opaque", iommu);
+    qdev_prop_set_uint32(dev, "is_ledma", is_ledma);
     qdev_init_nofail(dev);
     s = sysbus_from_qdev(dev);
     sysbus_connect_irq(s, 0, parent_irq);
@@ -587,7 +597,7 @@ static int idreg_init1(SysBusDevice *dev)
 {
     ram_addr_t idreg_offset;
 
-    idreg_offset = qemu_ram_alloc(sizeof(idreg_data));
+    idreg_offset = qemu_ram_alloc(NULL, "sun4m.idreg", sizeof(idreg_data));
     sysbus_init_mmio(dev, sizeof(idreg_data), idreg_offset | IO_MEM_ROM);
     return 0;
 }
@@ -622,7 +632,7 @@ static int afx_init1(SysBusDevice *dev)
 {
     ram_addr_t afx_offset;
 
-    afx_offset = qemu_ram_alloc(4);
+    afx_offset = qemu_ram_alloc(NULL, "sun4m.afx", 4);
     sysbus_init_mmio(dev, 4, afx_offset | IO_MEM_RAM);
     return 0;
 }
@@ -685,7 +695,7 @@ static int prom_init1(SysBusDevice *dev)
 {
     ram_addr_t prom_offset;
 
-    prom_offset = qemu_ram_alloc(PROM_SIZE_MAX);
+    prom_offset = qemu_ram_alloc(NULL, "sun4m.prom", PROM_SIZE_MAX);
     sysbus_init_mmio(dev, PROM_SIZE_MAX, prom_offset | IO_MEM_ROM);
     return 0;
 }
@@ -720,7 +730,7 @@ static int ram_init1(SysBusDevice *dev)
 
     RAM_size = d->size;
 
-    ram_offset = qemu_ram_alloc(RAM_size);
+    ram_offset = qemu_ram_alloc(NULL, "sun4m.ram", RAM_size);
     sysbus_init_mmio(dev, RAM_size, ram_offset);
     return 0;
 }
@@ -799,12 +809,13 @@ static void sun4m_hw_init(const struct sun4m_hwdef *hwdef, ram_addr_t RAM_size,
     void *iommu, *espdma, *ledma, *nvram;
     qemu_irq *cpu_irqs[MAX_CPUS], slavio_irq[32], slavio_cpu_irq[MAX_CPUS],
         espdma_irq, ledma_irq;
-    qemu_irq esp_reset;
+    qemu_irq esp_reset, dma_enable;
     qemu_irq fdc_tc;
     qemu_irq *cpu_halt;
     unsigned long kernel_size;
     DriveInfo *fd[MAX_FD];
     void *fw_cfg;
+    unsigned int num_vsimms;
 
     /* init CPUs */
     if (!cpu_model)
@@ -820,6 +831,10 @@ static void sun4m_hw_init(const struct sun4m_hwdef *hwdef, ram_addr_t RAM_size,
 
     /* set up devices */
     ram_init(0, RAM_size, hwdef->max_mem);
+    /* models without ECC don't trap when missing ram is accessed */
+    if (!hwdef->ecc_base) {
+        empty_slot_init(RAM_size, hwdef->max_mem - RAM_size);
+    }
 
     prom_init(hwdef->slavio_base, bios_name);
 
@@ -845,18 +860,40 @@ static void sun4m_hw_init(const struct sun4m_hwdef *hwdef, ram_addr_t RAM_size,
     iommu = iommu_init(hwdef->iommu_base, hwdef->iommu_version,
                        slavio_irq[30]);
 
+    if (hwdef->iommu_pad_base) {
+        /* On the real hardware (SS-5, LX) the MMU is not padded, but aliased.
+           Software shouldn't use aliased addresses, neither should it crash
+           when does. Using empty_slot instead of aliasing can help with
+           debugging such accesses */
+        empty_slot_init(hwdef->iommu_pad_base,hwdef->iommu_pad_len);
+    }
+
     espdma = sparc32_dma_init(hwdef->dma_base, slavio_irq[18],
-                              iommu, &espdma_irq);
+                              iommu, &espdma_irq, 0);
 
     ledma = sparc32_dma_init(hwdef->dma_base + 16ULL,
-                             slavio_irq[16], iommu, &ledma_irq);
+                             slavio_irq[16], iommu, &ledma_irq, 1);
 
     if (graphic_depth != 8 && graphic_depth != 24) {
         fprintf(stderr, "qemu: Unsupported depth: %d\n", graphic_depth);
         exit (1);
     }
-    tcx_init(hwdef->tcx_base, 0x00100000, graphic_width, graphic_height,
-             graphic_depth);
+    num_vsimms = 0;
+    if (num_vsimms == 0) {
+        tcx_init(hwdef->tcx_base, 0x00100000, graphic_width, graphic_height,
+                 graphic_depth);
+    }
+
+    for (i = num_vsimms; i < MAX_VSIMMS; i++) {
+        /* vsimm registers probed by OBP */
+        if (hwdef->vsimm[i].reg_base) {
+            empty_slot_init(hwdef->vsimm[i].reg_base, 0x2000);
+        }
+    }
+
+    if (hwdef->sx_base) {
+        empty_slot_init(hwdef->sx_base, 0x2000);
+    }
 
     lance_init(&nd_table[0], hwdef->le_base, ledma, ledma_irq);
 
@@ -892,15 +929,29 @@ static void sun4m_hw_init(const struct sun4m_hwdef *hwdef, ram_addr_t RAM_size,
         exit(1);
     }
 
-    esp_reset = qdev_get_gpio_in(espdma, 0);
     esp_init(hwdef->esp_base, 2,
              espdma_memory_read, espdma_memory_write,
-             espdma, espdma_irq, &esp_reset);
+             espdma, espdma_irq, &esp_reset, &dma_enable);
 
+    qdev_connect_gpio_out(espdma, 0, esp_reset);
+    qdev_connect_gpio_out(espdma, 1, dma_enable);
 
     if (hwdef->cs_base) {
         sysbus_create_simple("SUNW,CS4231", hwdef->cs_base,
                              slavio_irq[5]);
+    }
+
+    if (hwdef->dbri_base) {
+        /* ISDN chip with attached CS4215 audio codec */
+        /* prom space */
+        empty_slot_init(hwdef->dbri_base+0x1000, 0x30);
+        /* reg space */
+        empty_slot_init(hwdef->dbri_base+0x10000, 0x100);
+    }
+
+    if (hwdef->bpp_base) {
+        /* parallel port */
+        empty_slot_init(hwdef->bpp_base, 0x20);
     }
 
     kernel_size = sun4m_load_kernel(kernel_filename, initrd_filename,
@@ -928,8 +979,11 @@ static void sun4m_hw_init(const struct sun4m_hwdef *hwdef, ram_addr_t RAM_size,
         fw_cfg_add_bytes(fw_cfg, FW_CFG_CMDLINE_DATA,
                          (uint8_t*)strdup(kernel_cmdline),
                          strlen(kernel_cmdline) + 1);
+        fw_cfg_add_i32(fw_cfg, FW_CFG_CMDLINE_SIZE,
+                       strlen(kernel_cmdline) + 1);
     } else {
         fw_cfg_add_i32(fw_cfg, FW_CFG_KERNEL_CMDLINE, 0);
+        fw_cfg_add_i32(fw_cfg, FW_CFG_CMDLINE_SIZE, 0);
     }
     fw_cfg_add_i32(fw_cfg, FW_CFG_INITRD_ADDR, INITRD_LOAD_ADDR);
     fw_cfg_add_i32(fw_cfg, FW_CFG_INITRD_SIZE, 0); // not used
@@ -956,6 +1010,8 @@ static const struct sun4m_hwdef sun4m_hwdefs[] = {
     /* SS-5 */
     {
         .iommu_base   = 0x10000000,
+        .iommu_pad_base = 0x10004000,
+        .iommu_pad_len  = 0x0fffb000,
         .tcx_base     = 0x50000000,
         .cs_base      = 0x6c000000,
         .slavio_base  = 0x70000000,
@@ -1044,9 +1100,25 @@ static const struct sun4m_hwdef sun4m_hwdefs[] = {
         .dma_base     = 0xef0400000ULL,
         .esp_base     = 0xef0800000ULL,
         .le_base      = 0xef0c00000ULL,
+        .bpp_base     = 0xef4800000ULL,
         .apc_base     = 0xefa000000ULL, // XXX should not exist
         .aux1_base    = 0xff1800000ULL,
         .aux2_base    = 0xff1a01000ULL,
+        .dbri_base    = 0xee0000000ULL,
+        .sx_base      = 0xf80000000ULL,
+        .vsimm        = {
+            {
+                .reg_base  = 0x9c000000ULL,
+                .vram_base = 0xfc000000ULL
+            }, {
+                .reg_base  = 0x90000000ULL,
+                .vram_base = 0xf0000000ULL
+            }, {
+                .reg_base  = 0x94000000ULL
+            }, {
+                .reg_base  = 0x98000000ULL
+            }
+        },
         .ecc_base     = 0xf00000000ULL,
         .ecc_version  = 0x20000000, // version 0, implementation 2
         .nvram_machine_id = 0x72,
@@ -1082,6 +1154,8 @@ static const struct sun4m_hwdef sun4m_hwdefs[] = {
     /* LX */
     {
         .iommu_base   = 0x10000000,
+        .iommu_pad_base = 0x10004000,
+        .iommu_pad_len  = 0x0fffb000,
         .tcx_base     = 0x50000000,
         .slavio_base  = 0x70000000,
         .ms_kb_base   = 0x71000000,
@@ -1420,7 +1494,7 @@ static void sun4d_hw_init(const struct sun4d_hwdef *hwdef, ram_addr_t RAM_size,
     void *iounits[MAX_IOUNITS], *espdma, *ledma, *nvram;
     qemu_irq *cpu_irqs[MAX_CPUS], sbi_irq[32], sbi_cpu_irq[MAX_CPUS],
         espdma_irq, ledma_irq;
-    qemu_irq esp_reset;
+    qemu_irq esp_reset, dma_enable;
     unsigned long kernel_size;
     void *fw_cfg;
     DeviceState *dev;
@@ -1457,10 +1531,11 @@ static void sun4d_hw_init(const struct sun4d_hwdef *hwdef, ram_addr_t RAM_size,
                                     sbi_irq[0]);
 
     espdma = sparc32_dma_init(hwdef->espdma_base, sbi_irq[3],
-                              iounits[0], &espdma_irq);
+                              iounits[0], &espdma_irq, 0);
 
+    /* should be lebuffer instead */
     ledma = sparc32_dma_init(hwdef->ledma_base, sbi_irq[4],
-                             iounits[0], &ledma_irq);
+                             iounits[0], &ledma_irq, 0);
 
     if (graphic_depth != 8 && graphic_depth != 24) {
         fprintf(stderr, "qemu: Unsupported depth: %d\n", graphic_depth);
@@ -1487,10 +1562,12 @@ static void sun4d_hw_init(const struct sun4d_hwdef *hwdef, ram_addr_t RAM_size,
         exit(1);
     }
 
-    esp_reset = qdev_get_gpio_in(espdma, 0);
     esp_init(hwdef->esp_base, 2,
              espdma_memory_read, espdma_memory_write,
-             espdma, espdma_irq, &esp_reset);
+             espdma, espdma_irq, &esp_reset, &dma_enable);
+
+    qdev_connect_gpio_out(espdma, 0, esp_reset);
+    qdev_connect_gpio_out(espdma, 1, dma_enable);
 
     kernel_size = sun4m_load_kernel(kernel_filename, initrd_filename,
                                     RAM_size);
@@ -1609,7 +1686,7 @@ static void sun4c_hw_init(const struct sun4c_hwdef *hwdef, ram_addr_t RAM_size,
 {
     void *iommu, *espdma, *ledma, *nvram;
     qemu_irq *cpu_irqs, slavio_irq[8], espdma_irq, ledma_irq;
-    qemu_irq esp_reset;
+    qemu_irq esp_reset, dma_enable;
     qemu_irq fdc_tc;
     unsigned long kernel_size;
     DriveInfo *fd[MAX_FD];
@@ -1638,10 +1715,10 @@ static void sun4c_hw_init(const struct sun4c_hwdef *hwdef, ram_addr_t RAM_size,
                        slavio_irq[1]);
 
     espdma = sparc32_dma_init(hwdef->dma_base, slavio_irq[2],
-                              iommu, &espdma_irq);
+                              iommu, &espdma_irq, 0);
 
     ledma = sparc32_dma_init(hwdef->dma_base + 16ULL,
-                             slavio_irq[3], iommu, &ledma_irq);
+                             slavio_irq[3], iommu, &ledma_irq, 1);
 
     if (graphic_depth != 8 && graphic_depth != 24) {
         fprintf(stderr, "qemu: Unsupported depth: %d\n", graphic_depth);
@@ -1677,10 +1754,12 @@ static void sun4c_hw_init(const struct sun4c_hwdef *hwdef, ram_addr_t RAM_size,
         exit(1);
     }
 
-    esp_reset = qdev_get_gpio_in(espdma, 0);
     esp_init(hwdef->esp_base, 2,
              espdma_memory_read, espdma_memory_write,
-             espdma, espdma_irq, &esp_reset);
+             espdma, espdma_irq, &esp_reset, &dma_enable);
+
+    qdev_connect_gpio_out(espdma, 0, esp_reset);
+    qdev_connect_gpio_out(espdma, 1, dma_enable);
 
     kernel_size = sun4m_load_kernel(kernel_filename, initrd_filename,
                                     RAM_size);

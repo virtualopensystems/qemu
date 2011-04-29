@@ -541,7 +541,6 @@ static TCGv gen_lea(DisasContext *s, uint16_t insn, int opsize)
             offset = read_im32(s);
             return gen_im32(offset);
         case 2: /* pc displacement  */
-            tmp = tcg_temp_new();
             offset = s->pc;
             offset += ldsw_code(s->pc);
             s->pc += 2;
@@ -862,7 +861,7 @@ static void gen_jmp_tb(DisasContext *s, int n, uint32_t dest)
                (s->pc & TARGET_PAGE_MASK) == (dest & TARGET_PAGE_MASK)) {
         tcg_gen_goto_tb(n);
         tcg_gen_movi_i32(QREG_PC, dest);
-        tcg_gen_exit_tb((long)tb + n);
+        tcg_gen_exit_tb((tcg_target_long)tb + n);
     } else {
         gen_jmp_im(s, dest);
         tcg_gen_exit_tb(0);
@@ -2969,7 +2968,6 @@ gen_intermediate_code_internal(CPUState *env, TranslationBlock *tb,
     int j, lj;
     target_ulong pc_start;
     int pc_offset;
-    int last_cc_op;
     int num_insns;
     int max_insns;
 
@@ -3023,7 +3021,6 @@ gen_intermediate_code_internal(CPUState *env, TranslationBlock *tb,
         }
         if (num_insns + 1 == max_insns && (tb->cflags & CF_LAST_IO))
             gen_io_start();
-        last_cc_op = dc->cc_op;
         dc->insn_pc = dc->pc;
 	disas_m68k_insn(env, dc);
         num_insns++;
@@ -3095,8 +3092,7 @@ void gen_intermediate_code_pc(CPUState *env, TranslationBlock *tb)
     gen_intermediate_code_internal(env, tb, 1);
 }
 
-void cpu_dump_state(CPUState *env, FILE *f,
-                    int (*cpu_fprintf)(FILE *f, const char *fmt, ...),
+void cpu_dump_state(CPUState *env, FILE *f, fprintf_function cpu_fprintf,
                     int flags)
 {
     int i;
@@ -3117,8 +3113,7 @@ void cpu_dump_state(CPUState *env, FILE *f,
     cpu_fprintf (f, "FPRESULT = %12g\n", *(double *)&env->fp_result);
 }
 
-void gen_pc_load(CPUState *env, TranslationBlock *tb,
-                unsigned long searched_pc, int pc_pos, void *puc)
+void restore_state_to_opc(CPUState *env, TranslationBlock *tb, int pc_pos)
 {
     env->pc = gen_opc_pc[pc_pos];
 }

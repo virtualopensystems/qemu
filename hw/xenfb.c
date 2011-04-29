@@ -29,7 +29,6 @@
 #include <sys/types.h>
 #include <fcntl.h>
 #include <unistd.h>
-#include <stdbool.h>
 #include <sys/mman.h>
 #include <errno.h>
 #include <stdio.h>
@@ -45,7 +44,6 @@
 #include <xen/io/protocols.h>
 
 #include "hw.h"
-#include "sysemu.h"
 #include "console.h"
 #include "qemu-char.h"
 #include "xen_backend.h"

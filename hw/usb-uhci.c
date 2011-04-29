@@ -57,12 +57,17 @@
 #define TD_CTRL_NAK     (1 << 19)
 #define TD_CTRL_TIMEOUT (1 << 18)
 
+#define UHCI_PORT_SUSPEND (1 << 12)
 #define UHCI_PORT_RESET (1 << 9)
 #define UHCI_PORT_LSDA  (1 << 8)
+#define UHCI_PORT_RD    (1 << 6)
 #define UHCI_PORT_ENC   (1 << 3)
 #define UHCI_PORT_EN    (1 << 2)
 #define UHCI_PORT_CSC   (1 << 1)
 #define UHCI_PORT_CCS   (1 << 0)
+
+#define UHCI_PORT_READ_ONLY    (0x1bb)
+#define UHCI_PORT_WRITE_CLEAR  (UHCI_PORT_CSC | UHCI_PORT_ENC)
 
 #define FRAME_TIMER_FREQ 1000
 
@@ -307,8 +312,6 @@ static UHCIAsync *uhci_async_find_td(UHCIState *s, uint32_t addr, uint32_t token
     return match;
 }
 
-static void uhci_attach(USBPort *port1, USBDevice *dev);
-
 static void uhci_update_irq(UHCIState *s)
 {
     int level;
@@ -348,8 +351,9 @@ static void uhci_reset(void *opaque)
     for(i = 0; i < NB_PORTS; i++) {
         port = &s->ports[i];
         port->ctrl = 0x0080;
-        if (port->port.dev)
-            uhci_attach(&port->port, port->port.dev);
+        if (port->port.dev) {
+            usb_attach(&port->port, port->port.dev);
+        }
     }
 
     uhci_async_cancel_all(s);
@@ -375,7 +379,7 @@ static const VMStateDescription vmstate_uhci_port = {
 
 static const VMStateDescription vmstate_uhci = {
     .name = "uhci",
-    .version_id = 1,
+    .version_id = 2,
     .minimum_version_id = 1,
     .minimum_version_id_old = 1,
     .pre_save = uhci_pre_save,
@@ -392,6 +396,7 @@ static const VMStateDescription vmstate_uhci = {
         VMSTATE_UINT8(sof_timing, UHCIState),
         VMSTATE_UINT8(status2, UHCIState),
         VMSTATE_TIMER(frame_timer, UHCIState),
+        VMSTATE_INT64_V(expire_time, UHCIState, 2),
         VMSTATE_END_OF_LIST()
     }
 };
@@ -436,7 +441,7 @@ static void uhci_ioport_writew(void *opaque, uint32_t addr, uint32_t val)
     case 0x00:
         if ((val & UHCI_CMD_RS) && !(s->cmd & UHCI_CMD_RS)) {
             /* start frame processing */
-            qemu_mod_timer(s->frame_timer, qemu_get_clock(vm_clock));
+            qemu_mod_timer(s->frame_timer, qemu_get_clock_ns(vm_clock));
             s->status &= ~UHCI_STS_HCHALTED;
         } else if (!(val & UHCI_CMD_RS)) {
             s->status |= UHCI_STS_HCHALTED;
@@ -497,9 +502,10 @@ static void uhci_ioport_writew(void *opaque, uint32_t addr, uint32_t val)
                     usb_send_msg(dev, USB_MSG_RESET);
                 }
             }
-            port->ctrl = (port->ctrl & 0x01fb) | (val & ~0x01fb);
+            port->ctrl &= UHCI_PORT_READ_ONLY;
+            port->ctrl |= (val & ~UHCI_PORT_READ_ONLY);
             /* some bits are reset when a '1' is written to them */
-            port->ctrl &= ~(val & 0x000a);
+            port->ctrl &= ~(val & UHCI_PORT_WRITE_CLEAR);
         }
         break;
     }
@@ -592,49 +598,52 @@ static void uhci_resume (void *opaque)
     }
 }
 
-static void uhci_attach(USBPort *port1, USBDevice *dev)
+static void uhci_attach(USBPort *port1)
 {
     UHCIState *s = port1->opaque;
     UHCIPort *port = &s->ports[port1->index];
 
-    if (dev) {
-        if (port->port.dev) {
-            usb_attach(port1, NULL);
-        }
-        /* set connect status */
-        port->ctrl |= UHCI_PORT_CCS | UHCI_PORT_CSC;
+    /* set connect status */
+    port->ctrl |= UHCI_PORT_CCS | UHCI_PORT_CSC;
 
-        /* update speed */
-        if (dev->speed == USB_SPEED_LOW)
-            port->ctrl |= UHCI_PORT_LSDA;
-        else
-            port->ctrl &= ~UHCI_PORT_LSDA;
-
-        uhci_resume(s);
-
-        port->port.dev = dev;
-        /* send the attach message */
-        usb_send_msg(dev, USB_MSG_ATTACH);
+    /* update speed */
+    if (port->port.dev->speed == USB_SPEED_LOW) {
+        port->ctrl |= UHCI_PORT_LSDA;
     } else {
-        /* set connect status */
-        if (port->ctrl & UHCI_PORT_CCS) {
-            port->ctrl &= ~UHCI_PORT_CCS;
-            port->ctrl |= UHCI_PORT_CSC;
-        }
-        /* disable port */
-        if (port->ctrl & UHCI_PORT_EN) {
-            port->ctrl &= ~UHCI_PORT_EN;
-            port->ctrl |= UHCI_PORT_ENC;
-        }
+        port->ctrl &= ~UHCI_PORT_LSDA;
+    }
 
+    uhci_resume(s);
+}
+
+static void uhci_detach(USBPort *port1)
+{
+    UHCIState *s = port1->opaque;
+    UHCIPort *port = &s->ports[port1->index];
+
+    /* set connect status */
+    if (port->ctrl & UHCI_PORT_CCS) {
+        port->ctrl &= ~UHCI_PORT_CCS;
+        port->ctrl |= UHCI_PORT_CSC;
+    }
+    /* disable port */
+    if (port->ctrl & UHCI_PORT_EN) {
+        port->ctrl &= ~UHCI_PORT_EN;
+        port->ctrl |= UHCI_PORT_ENC;
+    }
+
+    uhci_resume(s);
+}
+
+static void uhci_wakeup(USBDevice *dev)
+{
+    USBBus *bus = usb_bus_from_device(dev);
+    UHCIState *s = container_of(bus, UHCIState, bus);
+    UHCIPort *port = s->ports + dev->port->index;
+
+    if (port->ctrl & UHCI_PORT_SUSPEND && !(port->ctrl & UHCI_PORT_RD)) {
+        port->ctrl |= UHCI_PORT_RD;
         uhci_resume(s);
-
-        dev = port->port.dev;
-        if (dev) {
-            /* send the detach message */
-            usb_send_msg(dev, USB_MSG_DETACH);
-        }
-        port->port.dev = NULL;
     }
 }
 
@@ -698,7 +707,6 @@ static int uhci_complete_td(UHCIState *s, UHCI_TD *td, UHCIAsync *async, uint32_
 
     if (pid == USB_TOKEN_IN) {
         if (len > max_len) {
-            len = max_len;
             ret = USB_RET_BABBLE;
             goto out;
         }
@@ -865,8 +873,7 @@ static void uhci_async_complete(USBPacket *packet, void *opaque)
         UHCI_TD td;
         uint32_t link = async->td;
         uint32_t int_mask = 0, val;
-        int len;
- 
+
         cpu_physical_memory_read(link & ~0xf, (uint8_t *) &td, sizeof(td));
         le32_to_cpus(&td.link);
         le32_to_cpus(&td.ctrl);
@@ -874,7 +881,7 @@ static void uhci_async_complete(USBPacket *packet, void *opaque)
         le32_to_cpus(&td.buffer);
 
         uhci_async_unlink(s, async);
-        len = uhci_complete_td(s, &td, async, &int_mask);
+        uhci_complete_td(s, &td, async, &int_mask);
         s->pending_int_mask |= int_mask;
 
         /* update the status bits of the TD */
@@ -1102,6 +1109,12 @@ static void uhci_map(PCIDevice *pci_dev, int region_num,
     register_ioport_read(addr, 32, 1, uhci_ioport_readb, s);
 }
 
+static USBPortOps uhci_port_ops = {
+    .attach = uhci_attach,
+    .detach = uhci_detach,
+    .wakeup = uhci_wakeup,
+};
+
 static int usb_uhci_common_initfn(UHCIState *s)
 {
     uint8_t *pci_conf = s->dev.config;
@@ -1110,17 +1123,18 @@ static int usb_uhci_common_initfn(UHCIState *s)
     pci_conf[PCI_REVISION_ID] = 0x01; // revision number
     pci_conf[PCI_CLASS_PROG] = 0x00;
     pci_config_set_class(pci_conf, PCI_CLASS_SERIAL_USB);
-    pci_conf[PCI_HEADER_TYPE] = PCI_HEADER_TYPE_NORMAL; // header_type
     /* TODO: reset value should be 0. */
     pci_conf[PCI_INTERRUPT_PIN] = 4; // interrupt pin 3
     pci_conf[0x60] = 0x10; // release number
 
     usb_bus_new(&s->bus, &s->dev.qdev);
     for(i = 0; i < NB_PORTS; i++) {
-        usb_register_port(&s->bus, &s->ports[i].port, s, i, uhci_attach);
+        usb_register_port(&s->bus, &s->ports[i].port, s, i, &uhci_port_ops,
+                          USB_SPEED_MASK_LOW | USB_SPEED_MASK_FULL);
+        usb_port_location(&s->ports[i].port, NULL, i+1);
     }
-    s->frame_timer = qemu_new_timer(vm_clock, uhci_frame_timer, s);
-    s->expire_time = qemu_get_clock(vm_clock) +
+    s->frame_timer = qemu_new_timer_ns(vm_clock, uhci_frame_timer, s);
+    s->expire_time = qemu_get_clock_ns(vm_clock) +
         (get_ticks_per_sec() / FRAME_TIMER_FREQ);
     s->num_ports_vmstate = NB_PORTS;
 
@@ -1154,6 +1168,24 @@ static int usb_uhci_piix4_initfn(PCIDevice *dev)
     return usb_uhci_common_initfn(s);
 }
 
+static int usb_uhci_vt82c686b_initfn(PCIDevice *dev)
+{
+    UHCIState *s = DO_UPCAST(UHCIState, dev, dev);
+    uint8_t *pci_conf = s->dev.config;
+
+    pci_config_set_vendor_id(pci_conf, PCI_VENDOR_ID_VIA);
+    pci_config_set_device_id(pci_conf, PCI_DEVICE_ID_VIA_UHCI);
+
+    /* USB misc control 1/2 */
+    pci_set_long(pci_conf + 0x40,0x00001000);
+    /* PM capability */
+    pci_set_long(pci_conf + 0x80,0x00020001);
+    /* USB legacy support  */
+    pci_set_long(pci_conf + 0xc0,0x00002000);
+
+    return usb_uhci_common_initfn(s);
+}
+
 static PCIDeviceInfo uhci_info[] = {
     {
         .qdev.name    = "piix3-usb-uhci",
@@ -1165,6 +1197,11 @@ static PCIDeviceInfo uhci_info[] = {
         .qdev.size    = sizeof(UHCIState),
         .qdev.vmsd    = &vmstate_uhci,
         .init         = usb_uhci_piix4_initfn,
+    },{
+        .qdev.name    = "vt82c686b-usb-uhci",
+        .qdev.size    = sizeof(UHCIState),
+        .qdev.vmsd    = &vmstate_uhci,
+        .init         = usb_uhci_vt82c686b_initfn,
     },{
         /* end of list */
     }
@@ -1184,4 +1221,9 @@ void usb_uhci_piix3_init(PCIBus *bus, int devfn)
 void usb_uhci_piix4_init(PCIBus *bus, int devfn)
 {
     pci_create_simple(bus, devfn, "piix4-usb-uhci");
+}
+
+void usb_uhci_vt82c686b_init(PCIBus *bus, int devfn)
+{
+    pci_create_simple(bus, devfn, "vt82c686b-usb-uhci");
 }

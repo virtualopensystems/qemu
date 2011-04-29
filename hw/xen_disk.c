@@ -41,6 +41,7 @@
 #include "qemu-char.h"
 #include "xen_blkif.h"
 #include "xen_backend.h"
+#include "blockdev.h"
 
 /* ------------------------------------------------------------- */
 
@@ -180,6 +181,10 @@ static int ioreq_parse(struct ioreq *ioreq)
 	ioreq->prot = PROT_WRITE; /* to memory */
 	break;
     case BLKIF_OP_WRITE_BARRIER:
+        if (!ioreq->req.nr_segments) {
+            ioreq->presync = 1;
+            return 0;
+        }
 	if (!syncwrite)
 	    ioreq->presync = ioreq->postsync = 1;
 	/* fall through */
@@ -304,8 +309,8 @@ static int ioreq_runio_qemu_sync(struct ioreq *ioreq)
     int i, rc, len = 0;
     off_t pos;
 
-    if (ioreq_map(ioreq) == -1)
-	goto err;
+    if (ioreq->req.nr_segments && ioreq_map(ioreq) == -1)
+	goto err_no_map;
     if (ioreq->presync)
 	bdrv_flush(blkdev->bs);
 
@@ -328,6 +333,8 @@ static int ioreq_runio_qemu_sync(struct ioreq *ioreq)
 	break;
     case BLKIF_OP_WRITE:
     case BLKIF_OP_WRITE_BARRIER:
+        if (!ioreq->req.nr_segments)
+            break;
 	pos = ioreq->start;
 	for (i = 0; i < ioreq->v.niov; i++) {
 	    rc = bdrv_write(blkdev->bs, pos / BLOCK_SIZE,
@@ -357,6 +364,9 @@ static int ioreq_runio_qemu_sync(struct ioreq *ioreq)
     return 0;
 
 err:
+    ioreq_unmap(ioreq);
+err_no_map:
+    ioreq_finish(ioreq);
     ioreq->status = BLKIF_RSP_ERROR;
     return -1;
 }
@@ -385,8 +395,8 @@ static int ioreq_runio_qemu_aio(struct ioreq *ioreq)
 {
     struct XenBlkDev *blkdev = ioreq->blkdev;
 
-    if (ioreq_map(ioreq) == -1)
-	goto err;
+    if (ioreq->req.nr_segments && ioreq_map(ioreq) == -1)
+	goto err_no_map;
 
     ioreq->aio_inflight++;
     if (ioreq->presync)
@@ -401,6 +411,8 @@ static int ioreq_runio_qemu_aio(struct ioreq *ioreq)
 	break;
     case BLKIF_OP_WRITE:
     case BLKIF_OP_WRITE_BARRIER:
+        if (!ioreq->req.nr_segments)
+            break;
         ioreq->aio_inflight++;
         bdrv_aio_writev(blkdev->bs, ioreq->start / BLOCK_SIZE,
                         &ioreq->v, ioreq->v.size / BLOCK_SIZE,
@@ -418,6 +430,9 @@ static int ioreq_runio_qemu_aio(struct ioreq *ioreq)
     return 0;
 
 err:
+    ioreq_unmap(ioreq);
+err_no_map:
+    ioreq_finish(ioreq);
     ioreq->status = BLKIF_RSP_ERROR;
     return -1;
 }
@@ -575,7 +590,7 @@ static void blk_alloc(struct XenDevice *xendev)
 static int blk_init(struct XenDevice *xendev)
 {
     struct XenBlkDev *blkdev = container_of(xendev, struct XenBlkDev, xendev);
-    int index, mode, qflags, have_barriers, info = 0;
+    int index, qflags, have_barriers, info = 0;
     char *h;
 
     /* read xenstore entries */
@@ -609,10 +624,8 @@ static int blk_init(struct XenDevice *xendev)
 
     /* read-only ? */
     if (strcmp(blkdev->mode, "w") == 0) {
-	mode   = O_RDWR;
 	qflags = BDRV_O_RDWR;
     } else {
-	mode   = O_RDONLY;
 	qflags = 0;
 	info  |= VDISK_READONLY;
     }
@@ -627,17 +640,12 @@ static int blk_init(struct XenDevice *xendev)
     if (!blkdev->dinfo) {
         /* setup via xenbus -> create new block driver instance */
         xen_be_printf(&blkdev->xendev, 2, "create new bdrv (xenbus setup)\n");
-	blkdev->bs = bdrv_new(blkdev->dev);
-	if (blkdev->bs) {
-	    if (bdrv_open2(blkdev->bs, blkdev->filename, qflags,
-                           bdrv_find_whitelisted_format(blkdev->fileproto))
-                != 0) {
-		bdrv_delete(blkdev->bs);
-		blkdev->bs = NULL;
-	    }
-	}
-	if (!blkdev->bs)
-	    return -1;
+        blkdev->bs = bdrv_new(blkdev->dev);
+        if (bdrv_open(blkdev->bs, blkdev->filename, qflags,
+                      bdrv_find_whitelisted_format(blkdev->fileproto)) != 0) {
+            bdrv_delete(blkdev->bs);
+            return -1;
+        }
     } else {
         /* setup via qemu cmdline -> already setup for us */
         xen_be_printf(&blkdev->xendev, 2, "get configured bdrv (cmdline setup)\n");

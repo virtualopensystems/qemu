@@ -1,9 +1,7 @@
 #include "exec.h"
 #include "host-utils.h"
 #include "helper.h"
-#if !defined(CONFIG_USER_ONLY)
-#include "softmmu_exec.h"
-#endif /* !defined(CONFIG_USER_ONLY) */
+#include "sysemu.h"
 
 //#define DEBUG_MMU
 //#define DEBUG_MXCC
@@ -12,6 +10,7 @@
 //#define DEBUG_ASI
 //#define DEBUG_PCALL
 //#define DEBUG_PSTATE
+//#define DEBUG_CACHE_CONTROL
 
 #ifdef DEBUG_MMU
 #define DPRINTF_MMU(fmt, ...)                                   \
@@ -39,6 +38,13 @@
 #define DPRINTF_PSTATE(fmt, ...) do {} while (0)
 #endif
 
+#ifdef DEBUG_CACHE_CONTROL
+#define DPRINTF_CACHE_CONTROL(fmt, ...)                                   \
+    do { printf("CACHE_CONTROL: " fmt , ## __VA_ARGS__); } while (0)
+#else
+#define DPRINTF_CACHE_CONTROL(fmt, ...) do {} while (0)
+#endif
+
 #ifdef TARGET_SPARC64
 #ifndef TARGET_ABI32
 #define AM_CHECK(env1) ((env1)->pstate & PS_AM)
@@ -46,6 +52,32 @@
 #define AM_CHECK(env1) (1)
 #endif
 #endif
+
+#define DT0 (env->dt0)
+#define DT1 (env->dt1)
+#define QT0 (env->qt0)
+#define QT1 (env->qt1)
+
+/* Leon3 cache control */
+
+/* Cache control: emulate the behavior of cache control registers but without
+   any effect on the emulated */
+
+#define CACHE_STATE_MASK 0x3
+#define CACHE_DISABLED   0x0
+#define CACHE_FROZEN     0x1
+#define CACHE_ENABLED    0x3
+
+/* Cache Control register fields */
+
+#define CACHE_CTRL_IF (1 <<  4)  /* Instruction Cache Freeze on Interrupt */
+#define CACHE_CTRL_DF (1 <<  5)  /* Data Cache Freeze on Interrupt */
+#define CACHE_CTRL_DP (1 << 14)  /* Data cache flush pending */
+#define CACHE_CTRL_IP (1 << 15)  /* Instruction cache flush pending */
+#define CACHE_CTRL_IB (1 << 16)  /* Instruction burst fetch */
+#define CACHE_CTRL_FI (1 << 21)  /* Flush Instruction cache (Write only) */
+#define CACHE_CTRL_FD (1 << 22)  /* Flush Data cache (Write only) */
+#define CACHE_CTRL_DS (1 << 23)  /* Data cache snoop enable */
 
 #if defined(CONFIG_USER_ONLY) && defined(TARGET_SPARC64)
 static void do_unassigned_access(target_ulong addr, int is_write, int is_exec,
@@ -129,24 +161,59 @@ static void demap_tlb(SparcTLBEntry *tlb, target_ulong demap_addr,
 {
     unsigned int i;
     target_ulong mask;
+    uint64_t context;
+
+    int is_demap_context = (demap_addr >> 6) & 1;
+
+    // demap context
+    switch ((demap_addr >> 4) & 3) {
+    case 0: // primary
+        context = env1->dmmu.mmu_primary_context;
+        break;
+    case 1: // secondary
+        context = env1->dmmu.mmu_secondary_context;
+        break;
+    case 2: // nucleus
+        context = 0;
+        break;
+    case 3: // reserved
+    default:
+        return;
+    }
 
     for (i = 0; i < 64; i++) {
         if (TTE_IS_VALID(tlb[i].tte)) {
 
-            mask = 0xffffffffffffe000ULL;
-            mask <<= 3 * ((tlb[i].tte >> 61) & 3);
+            if (is_demap_context) {
+                // will remove non-global entries matching context value
+                if (TTE_IS_GLOBAL(tlb[i].tte) ||
+                    !tlb_compare_context(&tlb[i], context)) {
+                    continue;
+                }
+            } else {
+                // demap page
+                // will remove any entry matching VA
+                mask = 0xffffffffffffe000ULL;
+                mask <<= 3 * ((tlb[i].tte >> 61) & 3);
 
-            if ((demap_addr & mask) == (tlb[i].tag & mask)) {
-                replace_tlb_entry(&tlb[i], 0, 0, env1);
-#ifdef DEBUG_MMU
-                DPRINTF_MMU("%s demap invalidated entry [%02u]\n", strmmu, i);
-                dump_mmu(env1);
-#endif
+                if (!compare_masked(demap_addr, tlb[i].tag, mask)) {
+                    continue;
+                }
+
+                // entry should be global or matching context value
+                if (!TTE_IS_GLOBAL(tlb[i].tte) &&
+                    !tlb_compare_context(&tlb[i], context)) {
+                    continue;
+                }
             }
-            //return;
+
+            replace_tlb_entry(&tlb[i], 0, 0, env1);
+#ifdef DEBUG_MMU
+            DPRINTF_MMU("%s demap invalidated entry [%02u]\n", strmmu, i);
+            dump_mmu(stdout, fprintf, env1);
+#endif
         }
     }
-
 }
 
 static void replace_tlb_1bit_lru(SparcTLBEntry *tlb,
@@ -161,7 +228,7 @@ static void replace_tlb_1bit_lru(SparcTLBEntry *tlb,
             replace_tlb_entry(&tlb[i], tlb_tag, tlb_tte, env1);
 #ifdef DEBUG_MMU
             DPRINTF_MMU("%s lru replaced invalid entry [%i]\n", strmmu, i);
-            dump_mmu(env1);
+            dump_mmu(stdout, fprintf, env1);
 #endif
             return;
         }
@@ -180,7 +247,7 @@ static void replace_tlb_1bit_lru(SparcTLBEntry *tlb,
 #ifdef DEBUG_MMU
                 DPRINTF_MMU("%s lru replaced unlocked %s entry [%i]\n",
                             strmmu, (replace_used?"used":"unused"), i);
-                dump_mmu(env1);
+                dump_mmu(stdout, fprintf, env1);
 #endif
                 return;
             }
@@ -201,12 +268,49 @@ static void replace_tlb_1bit_lru(SparcTLBEntry *tlb,
 
 #endif
 
-static inline void address_mask(CPUState *env1, target_ulong *addr)
+static inline target_ulong address_mask(CPUState *env1, target_ulong addr)
 {
 #ifdef TARGET_SPARC64
     if (AM_CHECK(env1))
-        *addr &= 0xffffffffULL;
+        addr &= 0xffffffffULL;
 #endif
+    return addr;
+}
+
+/* returns true if access using this ASI is to have address translated by MMU
+   otherwise access is to raw physical address */
+static inline int is_translating_asi(int asi)
+{
+#ifdef TARGET_SPARC64
+    /* Ultrasparc IIi translating asi
+       - note this list is defined by cpu implementation
+     */
+    switch (asi) {
+    case 0x04 ... 0x11:
+    case 0x18 ... 0x19:
+    case 0x24 ... 0x2C:
+    case 0x70 ... 0x73:
+    case 0x78 ... 0x79:
+    case 0x80 ... 0xFF:
+        return 1;
+
+    default:
+        return 0;
+    }
+#else
+    /* TODO: check sparc32 bits */
+    return 0;
+#endif
+}
+
+static inline target_ulong asi_address_mask(CPUState *env1,
+                                            int asi, target_ulong addr)
+{
+    if (is_translating_asi(asi)) {
+        return address_mask(env, addr);
+    } else {
+        return addr;
+    }
 }
 
 static void raise_exception(int tt)
@@ -220,9 +324,11 @@ void HELPER(raise_exception)(int tt)
     raise_exception(tt);
 }
 
-static inline void set_cwp(int new_cwp)
+void helper_shutdown(void)
 {
-    cpu_set_cwp(env, new_cwp);
+#if !defined(CONFIG_USER_ONLY)
+    qemu_system_shutdown_request();
+#endif
 }
 
 void helper_check_align(target_ulong addr, uint32_t align)
@@ -788,65 +894,77 @@ void helper_fsqrtq(void)
     QT0 = float128_sqrt(QT1, &env->fp_status);
 }
 
-#define GEN_FCMP(name, size, reg1, reg2, FS, TRAP)                      \
+#define GEN_FCMP(name, size, reg1, reg2, FS, E)                         \
     void glue(helper_, name) (void)                                     \
     {                                                                   \
-        target_ulong new_fsr;                                           \
-                                                                        \
-        env->fsr &= ~((FSR_FCC1 | FSR_FCC0) << FS);                     \
+        env->fsr &= FSR_FTT_NMASK;                                      \
+        if (E && (glue(size, _is_any_nan)(reg1) ||                      \
+                     glue(size, _is_any_nan)(reg2)) &&                  \
+            (env->fsr & FSR_NVM)) {                                     \
+            env->fsr |= FSR_NVC;                                        \
+            env->fsr |= FSR_FTT_IEEE_EXCP;                              \
+            raise_exception(TT_FP_EXCP);                                \
+        }                                                               \
         switch (glue(size, _compare) (reg1, reg2, &env->fp_status)) {   \
         case float_relation_unordered:                                  \
-            new_fsr = (FSR_FCC1 | FSR_FCC0) << FS;                      \
-            if ((env->fsr & FSR_NVM) || TRAP) {                         \
-                env->fsr |= new_fsr;                                    \
+            if ((env->fsr & FSR_NVM)) {                                 \
                 env->fsr |= FSR_NVC;                                    \
                 env->fsr |= FSR_FTT_IEEE_EXCP;                          \
                 raise_exception(TT_FP_EXCP);                            \
             } else {                                                    \
+                env->fsr &= ~((FSR_FCC1 | FSR_FCC0) << FS);             \
+                env->fsr |= (FSR_FCC1 | FSR_FCC0) << FS;                \
                 env->fsr |= FSR_NVA;                                    \
             }                                                           \
             break;                                                      \
         case float_relation_less:                                       \
-            new_fsr = FSR_FCC0 << FS;                                   \
+            env->fsr &= ~((FSR_FCC1 | FSR_FCC0) << FS);                 \
+            env->fsr |= FSR_FCC0 << FS;                                 \
             break;                                                      \
         case float_relation_greater:                                    \
-            new_fsr = FSR_FCC1 << FS;                                   \
+            env->fsr &= ~((FSR_FCC1 | FSR_FCC0) << FS);                 \
+            env->fsr |= FSR_FCC1 << FS;                                 \
             break;                                                      \
         default:                                                        \
-            new_fsr = 0;                                                \
+            env->fsr &= ~((FSR_FCC1 | FSR_FCC0) << FS);                 \
             break;                                                      \
         }                                                               \
-        env->fsr |= new_fsr;                                            \
     }
-#define GEN_FCMPS(name, size, FS, TRAP)                                 \
+#define GEN_FCMPS(name, size, FS, E)                                    \
     void glue(helper_, name)(float32 src1, float32 src2)                \
     {                                                                   \
-        target_ulong new_fsr;                                           \
-                                                                        \
-        env->fsr &= ~((FSR_FCC1 | FSR_FCC0) << FS);                     \
+        env->fsr &= FSR_FTT_NMASK;                                      \
+        if (E && (glue(size, _is_any_nan)(src1) ||                      \
+                     glue(size, _is_any_nan)(src2)) &&                  \
+            (env->fsr & FSR_NVM)) {                                     \
+            env->fsr |= FSR_NVC;                                        \
+            env->fsr |= FSR_FTT_IEEE_EXCP;                              \
+            raise_exception(TT_FP_EXCP);                                \
+        }                                                               \
         switch (glue(size, _compare) (src1, src2, &env->fp_status)) {   \
         case float_relation_unordered:                                  \
-            new_fsr = (FSR_FCC1 | FSR_FCC0) << FS;                      \
-            if ((env->fsr & FSR_NVM) || TRAP) {                         \
-                env->fsr |= new_fsr;                                    \
+            if ((env->fsr & FSR_NVM)) {                                 \
                 env->fsr |= FSR_NVC;                                    \
                 env->fsr |= FSR_FTT_IEEE_EXCP;                          \
                 raise_exception(TT_FP_EXCP);                            \
             } else {                                                    \
+                env->fsr &= ~((FSR_FCC1 | FSR_FCC0) << FS);             \
+                env->fsr |= (FSR_FCC1 | FSR_FCC0) << FS;                \
                 env->fsr |= FSR_NVA;                                    \
             }                                                           \
             break;                                                      \
         case float_relation_less:                                       \
-            new_fsr = FSR_FCC0 << FS;                                   \
+            env->fsr &= ~((FSR_FCC1 | FSR_FCC0) << FS);                 \
+            env->fsr |= FSR_FCC0 << FS;                                 \
             break;                                                      \
         case float_relation_greater:                                    \
-            new_fsr = FSR_FCC1 << FS;                                   \
+            env->fsr &= ~((FSR_FCC1 | FSR_FCC0) << FS);                 \
+            env->fsr |= FSR_FCC1 << FS;                                 \
             break;                                                      \
         default:                                                        \
-            new_fsr = 0;                                                \
+            env->fsr &= ~((FSR_FCC1 | FSR_FCC0) << FS);                 \
             break;                                                      \
         }                                                               \
-        env->fsr |= new_fsr;                                            \
     }
 
 GEN_FCMPS(fcmps, float32, 0, 0);
@@ -868,14 +986,15 @@ static uint32_t compute_C_flags(void)
     return env->psr & PSR_CARRY;
 }
 
-static inline uint32_t get_NZ_icc(target_ulong dst)
+static inline uint32_t get_NZ_icc(int32_t dst)
 {
     uint32_t ret = 0;
 
-    if (!(dst & 0xffffffffULL))
-        ret |= PSR_ZERO;
-    if ((int32_t) (dst & 0xffffffffULL) < 0)
-        ret |= PSR_NEG;
+    if (dst == 0) {
+        ret = PSR_ZERO;
+    } else if (dst < 0) {
+        ret = PSR_NEG;
+    }
     return ret;
 }
 
@@ -890,14 +1009,15 @@ static uint32_t compute_C_flags_xcc(void)
     return env->xcc & PSR_CARRY;
 }
 
-static inline uint32_t get_NZ_xcc(target_ulong dst)
+static inline uint32_t get_NZ_xcc(target_long dst)
 {
     uint32_t ret = 0;
 
-    if (!dst)
-        ret |= PSR_ZERO;
-    if ((int64_t)dst < 0)
-        ret |= PSR_NEG;
+    if (!dst) {
+        ret = PSR_ZERO;
+    } else if (dst < 0) {
+        ret = PSR_NEG;
+    }
     return ret;
 }
 #endif
@@ -906,8 +1026,9 @@ static inline uint32_t get_V_div_icc(target_ulong src2)
 {
     uint32_t ret = 0;
 
-    if (src2 != 0)
-        ret |= PSR_OVF;
+    if (src2 != 0) {
+        ret = PSR_OVF;
+    }
     return ret;
 }
 
@@ -925,26 +1046,35 @@ static uint32_t compute_C_div(void)
     return 0;
 }
 
-/* carry = (src1[31] & src2[31]) | ( ~dst[31] & (src1[31] | src2[31])) */
-static inline uint32_t get_C_add_icc(target_ulong dst, target_ulong src1,
-                                     target_ulong src2)
+static inline uint32_t get_C_add_icc(uint32_t dst, uint32_t src1)
 {
     uint32_t ret = 0;
 
-    if (((src1 & (1ULL << 31)) & (src2 & (1ULL << 31)))
-        | ((~(dst & (1ULL << 31)))
-           & ((src1 & (1ULL << 31)) | (src2 & (1ULL << 31)))))
-        ret |= PSR_CARRY;
+    if (dst < src1) {
+        ret = PSR_CARRY;
+    }
     return ret;
 }
 
-static inline uint32_t get_V_add_icc(target_ulong dst, target_ulong src1,
-                                         target_ulong src2)
+static inline uint32_t get_C_addx_icc(uint32_t dst, uint32_t src1,
+                                      uint32_t src2)
 {
     uint32_t ret = 0;
 
-    if (((src1 ^ src2 ^ -1) & (src1 ^ dst)) & (1ULL << 31))
-        ret |= PSR_OVF;
+    if (((src1 & src2) | (~dst & (src1 | src2))) & (1U << 31)) {
+        ret = PSR_CARRY;
+    }
+    return ret;
+}
+
+static inline uint32_t get_V_add_icc(uint32_t dst, uint32_t src1,
+                                     uint32_t src2)
+{
+    uint32_t ret = 0;
+
+    if (((src1 ^ src2 ^ -1) & (src1 ^ dst)) & (1U << 31)) {
+        ret = PSR_OVF;
+    }
     return ret;
 }
 
@@ -953,8 +1083,20 @@ static inline uint32_t get_C_add_xcc(target_ulong dst, target_ulong src1)
 {
     uint32_t ret = 0;
 
-    if (dst < src1)
-        ret |= PSR_CARRY;
+    if (dst < src1) {
+        ret = PSR_CARRY;
+    }
+    return ret;
+}
+
+static inline uint32_t get_C_addx_xcc(target_ulong dst, target_ulong src1,
+                                      target_ulong src2)
+{
+    uint32_t ret = 0;
+
+    if (((src1 & src2) | (~dst & (src1 | src2))) & (1ULL << 63)) {
+        ret = PSR_CARRY;
+    }
     return ret;
 }
 
@@ -963,8 +1105,9 @@ static inline uint32_t get_V_add_xcc(target_ulong dst, target_ulong src1,
 {
     uint32_t ret = 0;
 
-    if (((src1 ^ src2 ^ -1) & (src1 ^ dst)) & (1ULL << 63))
-        ret |= PSR_OVF;
+    if (((src1 ^ src2 ^ -1) & (src1 ^ dst)) & (1ULL << 63)) {
+        ret = PSR_OVF;
+    }
     return ret;
 }
 
@@ -989,14 +1132,14 @@ static uint32_t compute_all_add(void)
     uint32_t ret;
 
     ret = get_NZ_icc(CC_DST);
-    ret |= get_C_add_icc(CC_DST, CC_SRC, CC_SRC2);
+    ret |= get_C_add_icc(CC_DST, CC_SRC);
     ret |= get_V_add_icc(CC_DST, CC_SRC, CC_SRC2);
     return ret;
 }
 
 static uint32_t compute_C_add(void)
 {
-    return get_C_add_icc(CC_DST, CC_SRC, CC_SRC2);
+    return get_C_add_icc(CC_DST, CC_SRC);
 }
 
 #ifdef TARGET_SPARC64
@@ -1005,8 +1148,7 @@ static uint32_t compute_all_addx_xcc(void)
     uint32_t ret;
 
     ret = get_NZ_xcc(CC_DST);
-    ret |= get_C_add_xcc(CC_DST - CC_SRC2, CC_SRC);
-    ret |= get_C_add_xcc(CC_DST, CC_SRC);
+    ret |= get_C_addx_xcc(CC_DST, CC_SRC, CC_SRC2);
     ret |= get_V_add_xcc(CC_DST, CC_SRC, CC_SRC2);
     return ret;
 }
@@ -1015,18 +1157,36 @@ static uint32_t compute_C_addx_xcc(void)
 {
     uint32_t ret;
 
-    ret = get_C_add_xcc(CC_DST - CC_SRC2, CC_SRC);
-    ret |= get_C_add_xcc(CC_DST, CC_SRC);
+    ret = get_C_addx_xcc(CC_DST, CC_SRC, CC_SRC2);
     return ret;
 }
 #endif
+
+static uint32_t compute_all_addx(void)
+{
+    uint32_t ret;
+
+    ret = get_NZ_icc(CC_DST);
+    ret |= get_C_addx_icc(CC_DST, CC_SRC, CC_SRC2);
+    ret |= get_V_add_icc(CC_DST, CC_SRC, CC_SRC2);
+    return ret;
+}
+
+static uint32_t compute_C_addx(void)
+{
+    uint32_t ret;
+
+    ret = get_C_addx_icc(CC_DST, CC_SRC, CC_SRC2);
+    return ret;
+}
 
 static inline uint32_t get_V_tag_icc(target_ulong src1, target_ulong src2)
 {
     uint32_t ret = 0;
 
-    if ((src1 | src2) & 0x3)
-        ret |= PSR_OVF;
+    if ((src1 | src2) & 0x3) {
+        ret = PSR_OVF;
+    }
     return ret;
 }
 
@@ -1035,15 +1195,10 @@ static uint32_t compute_all_tadd(void)
     uint32_t ret;
 
     ret = get_NZ_icc(CC_DST);
-    ret |= get_C_add_icc(CC_DST, CC_SRC, CC_SRC2);
+    ret |= get_C_add_icc(CC_DST, CC_SRC);
     ret |= get_V_add_icc(CC_DST, CC_SRC, CC_SRC2);
     ret |= get_V_tag_icc(CC_SRC, CC_SRC2);
     return ret;
-}
-
-static uint32_t compute_C_tadd(void)
-{
-    return get_C_add_icc(CC_DST, CC_SRC, CC_SRC2);
 }
 
 static uint32_t compute_all_taddtv(void)
@@ -1051,35 +1206,39 @@ static uint32_t compute_all_taddtv(void)
     uint32_t ret;
 
     ret = get_NZ_icc(CC_DST);
-    ret |= get_C_add_icc(CC_DST, CC_SRC, CC_SRC2);
+    ret |= get_C_add_icc(CC_DST, CC_SRC);
     return ret;
 }
 
-static uint32_t compute_C_taddtv(void)
-{
-    return get_C_add_icc(CC_DST, CC_SRC, CC_SRC2);
-}
-
-/* carry = (~src1[31] & src2[31]) | ( dst[31]  & (~src1[31] | src2[31])) */
-static inline uint32_t get_C_sub_icc(target_ulong dst, target_ulong src1,
-                                     target_ulong src2)
+static inline uint32_t get_C_sub_icc(uint32_t src1, uint32_t src2)
 {
     uint32_t ret = 0;
 
-    if (((~(src1 & (1ULL << 31))) & (src2 & (1ULL << 31)))
-        | ((dst & (1ULL << 31)) & (( ~(src1 & (1ULL << 31)))
-                                   | (src2 & (1ULL << 31)))))
-        ret |= PSR_CARRY;
+    if (src1 < src2) {
+        ret = PSR_CARRY;
+    }
     return ret;
 }
 
-static inline uint32_t get_V_sub_icc(target_ulong dst, target_ulong src1,
-                                     target_ulong src2)
+static inline uint32_t get_C_subx_icc(uint32_t dst, uint32_t src1,
+                                      uint32_t src2)
 {
     uint32_t ret = 0;
 
-    if (((src1 ^ src2) & (src1 ^ dst)) & (1ULL << 31))
-        ret |= PSR_OVF;
+    if (((~src1 & src2) | (dst & (~src1 | src2))) & (1U << 31)) {
+        ret = PSR_CARRY;
+    }
+    return ret;
+}
+
+static inline uint32_t get_V_sub_icc(uint32_t dst, uint32_t src1,
+                                     uint32_t src2)
+{
+    uint32_t ret = 0;
+
+    if (((src1 ^ src2) & (src1 ^ dst)) & (1U << 31)) {
+        ret = PSR_OVF;
+    }
     return ret;
 }
 
@@ -1089,8 +1248,20 @@ static inline uint32_t get_C_sub_xcc(target_ulong src1, target_ulong src2)
 {
     uint32_t ret = 0;
 
-    if (src1 < src2)
-        ret |= PSR_CARRY;
+    if (src1 < src2) {
+        ret = PSR_CARRY;
+    }
+    return ret;
+}
+
+static inline uint32_t get_C_subx_xcc(target_ulong dst, target_ulong src1,
+                                      target_ulong src2)
+{
+    uint32_t ret = 0;
+
+    if (((~src1 & src2) | (dst & (~src1 | src2))) & (1ULL << 63)) {
+        ret = PSR_CARRY;
+    }
     return ret;
 }
 
@@ -1099,8 +1270,9 @@ static inline uint32_t get_V_sub_xcc(target_ulong dst, target_ulong src1,
 {
     uint32_t ret = 0;
 
-    if (((src1 ^ src2) & (src1 ^ dst)) & (1ULL << 63))
-        ret |= PSR_OVF;
+    if (((src1 ^ src2) & (src1 ^ dst)) & (1ULL << 63)) {
+        ret = PSR_OVF;
+    }
     return ret;
 }
 
@@ -1125,14 +1297,14 @@ static uint32_t compute_all_sub(void)
     uint32_t ret;
 
     ret = get_NZ_icc(CC_DST);
-    ret |= get_C_sub_icc(CC_DST, CC_SRC, CC_SRC2);
+    ret |= get_C_sub_icc(CC_SRC, CC_SRC2);
     ret |= get_V_sub_icc(CC_DST, CC_SRC, CC_SRC2);
     return ret;
 }
 
 static uint32_t compute_C_sub(void)
 {
-    return get_C_sub_icc(CC_DST, CC_SRC, CC_SRC2);
+    return get_C_sub_icc(CC_SRC, CC_SRC2);
 }
 
 #ifdef TARGET_SPARC64
@@ -1141,8 +1313,7 @@ static uint32_t compute_all_subx_xcc(void)
     uint32_t ret;
 
     ret = get_NZ_xcc(CC_DST);
-    ret |= get_C_sub_xcc(CC_DST - CC_SRC2, CC_SRC);
-    ret |= get_C_sub_xcc(CC_DST, CC_SRC2);
+    ret |= get_C_subx_xcc(CC_DST, CC_SRC, CC_SRC2);
     ret |= get_V_sub_xcc(CC_DST, CC_SRC, CC_SRC2);
     return ret;
 }
@@ -1151,26 +1322,38 @@ static uint32_t compute_C_subx_xcc(void)
 {
     uint32_t ret;
 
-    ret = get_C_sub_xcc(CC_DST - CC_SRC2, CC_SRC);
-    ret |= get_C_sub_xcc(CC_DST, CC_SRC2);
+    ret = get_C_subx_xcc(CC_DST, CC_SRC, CC_SRC2);
     return ret;
 }
 #endif
+
+static uint32_t compute_all_subx(void)
+{
+    uint32_t ret;
+
+    ret = get_NZ_icc(CC_DST);
+    ret |= get_C_subx_icc(CC_DST, CC_SRC, CC_SRC2);
+    ret |= get_V_sub_icc(CC_DST, CC_SRC, CC_SRC2);
+    return ret;
+}
+
+static uint32_t compute_C_subx(void)
+{
+    uint32_t ret;
+
+    ret = get_C_subx_icc(CC_DST, CC_SRC, CC_SRC2);
+    return ret;
+}
 
 static uint32_t compute_all_tsub(void)
 {
     uint32_t ret;
 
     ret = get_NZ_icc(CC_DST);
-    ret |= get_C_sub_icc(CC_DST, CC_SRC, CC_SRC2);
+    ret |= get_C_sub_icc(CC_SRC, CC_SRC2);
     ret |= get_V_sub_icc(CC_DST, CC_SRC, CC_SRC2);
     ret |= get_V_tag_icc(CC_SRC, CC_SRC2);
     return ret;
-}
-
-static uint32_t compute_C_tsub(void)
-{
-    return get_C_sub_icc(CC_DST, CC_SRC, CC_SRC2);
 }
 
 static uint32_t compute_all_tsubtv(void)
@@ -1178,13 +1361,8 @@ static uint32_t compute_all_tsubtv(void)
     uint32_t ret;
 
     ret = get_NZ_icc(CC_DST);
-    ret |= get_C_sub_icc(CC_DST, CC_SRC, CC_SRC2);
+    ret |= get_C_sub_icc(CC_SRC, CC_SRC2);
     return ret;
-}
-
-static uint32_t compute_C_tsubtv(void)
-{
-    return get_C_sub_icc(CC_DST, CC_SRC, CC_SRC2);
 }
 
 static uint32_t compute_all_logic(void)
@@ -1214,13 +1392,13 @@ static const CCTable icc_table[CC_OP_NB] = {
     [CC_OP_FLAGS] = { compute_all_flags, compute_C_flags },
     [CC_OP_DIV] = { compute_all_div, compute_C_div },
     [CC_OP_ADD] = { compute_all_add, compute_C_add },
-    [CC_OP_ADDX] = { compute_all_add, compute_C_add },
-    [CC_OP_TADD] = { compute_all_tadd, compute_C_tadd },
-    [CC_OP_TADDTV] = { compute_all_taddtv, compute_C_taddtv },
+    [CC_OP_ADDX] = { compute_all_addx, compute_C_addx },
+    [CC_OP_TADD] = { compute_all_tadd, compute_C_add },
+    [CC_OP_TADDTV] = { compute_all_taddtv, compute_C_add },
     [CC_OP_SUB] = { compute_all_sub, compute_C_sub },
-    [CC_OP_SUBX] = { compute_all_sub, compute_C_sub },
-    [CC_OP_TSUB] = { compute_all_tsub, compute_C_tsub },
-    [CC_OP_TSUBTV] = { compute_all_tsubtv, compute_C_tsubtv },
+    [CC_OP_SUBX] = { compute_all_subx, compute_C_subx },
+    [CC_OP_TSUB] = { compute_all_tsub, compute_C_sub },
+    [CC_OP_TSUBTV] = { compute_all_tsubtv, compute_C_sub },
     [CC_OP_LOGIC] = { compute_all_logic, compute_C_logic },
 };
 
@@ -1259,6 +1437,140 @@ uint32_t helper_compute_C_icc(void)
     uint32_t ret;
 
     ret = icc_table[CC_OP].compute_c() >> PSR_CARRY_SHIFT;
+    return ret;
+}
+
+static inline void memcpy32(target_ulong *dst, const target_ulong *src)
+{
+    dst[0] = src[0];
+    dst[1] = src[1];
+    dst[2] = src[2];
+    dst[3] = src[3];
+    dst[4] = src[4];
+    dst[5] = src[5];
+    dst[6] = src[6];
+    dst[7] = src[7];
+}
+
+static void set_cwp(int new_cwp)
+{
+    /* put the modified wrap registers at their proper location */
+    if (env->cwp == env->nwindows - 1) {
+        memcpy32(env->regbase, env->regbase + env->nwindows * 16);
+    }
+    env->cwp = new_cwp;
+
+    /* put the wrap registers at their temporary location */
+    if (new_cwp == env->nwindows - 1) {
+        memcpy32(env->regbase + env->nwindows * 16, env->regbase);
+    }
+    env->regwptr = env->regbase + (new_cwp * 16);
+}
+
+void cpu_set_cwp(CPUState *env1, int new_cwp)
+{
+    CPUState *saved_env;
+
+    saved_env = env;
+    env = env1;
+    set_cwp(new_cwp);
+    env = saved_env;
+}
+
+static target_ulong get_psr(void)
+{
+    helper_compute_psr();
+
+#if !defined (TARGET_SPARC64)
+    return env->version | (env->psr & PSR_ICC) |
+        (env->psref? PSR_EF : 0) |
+        (env->psrpil << 8) |
+        (env->psrs? PSR_S : 0) |
+        (env->psrps? PSR_PS : 0) |
+        (env->psret? PSR_ET : 0) | env->cwp;
+#else
+    return env->psr & PSR_ICC;
+#endif
+}
+
+target_ulong cpu_get_psr(CPUState *env1)
+{
+    CPUState *saved_env;
+    target_ulong ret;
+
+    saved_env = env;
+    env = env1;
+    ret = get_psr();
+    env = saved_env;
+    return ret;
+}
+
+static void put_psr(target_ulong val)
+{
+    env->psr = val & PSR_ICC;
+#if !defined (TARGET_SPARC64)
+    env->psref = (val & PSR_EF)? 1 : 0;
+    env->psrpil = (val & PSR_PIL) >> 8;
+#endif
+#if ((!defined (TARGET_SPARC64)) && !defined(CONFIG_USER_ONLY))
+    cpu_check_irqs(env);
+#endif
+#if !defined (TARGET_SPARC64)
+    env->psrs = (val & PSR_S)? 1 : 0;
+    env->psrps = (val & PSR_PS)? 1 : 0;
+    env->psret = (val & PSR_ET)? 1 : 0;
+    set_cwp(val & PSR_CWP);
+#endif
+    env->cc_op = CC_OP_FLAGS;
+}
+
+void cpu_put_psr(CPUState *env1, target_ulong val)
+{
+    CPUState *saved_env;
+
+    saved_env = env;
+    env = env1;
+    put_psr(val);
+    env = saved_env;
+}
+
+static int cwp_inc(int cwp)
+{
+    if (unlikely(cwp >= env->nwindows)) {
+        cwp -= env->nwindows;
+    }
+    return cwp;
+}
+
+int cpu_cwp_inc(CPUState *env1, int cwp)
+{
+    CPUState *saved_env;
+    target_ulong ret;
+
+    saved_env = env;
+    env = env1;
+    ret = cwp_inc(cwp);
+    env = saved_env;
+    return ret;
+}
+
+static int cwp_dec(int cwp)
+{
+    if (unlikely(cwp < 0)) {
+        cwp += env->nwindows;
+    }
+    return cwp;
+}
+
+int cpu_cwp_dec(CPUState *env1, int cwp)
+{
+    CPUState *saved_env;
+    target_ulong ret;
+
+    saved_env = env;
+    env = env1;
+    ret = cwp_dec(cwp);
+    env = saved_env;
     return ret;
 }
 
@@ -1337,6 +1649,109 @@ static void dump_asi(const char *txt, target_ulong addr, int asi, int size,
 
 #ifndef TARGET_SPARC64
 #ifndef CONFIG_USER_ONLY
+
+
+/* Leon3 cache control */
+
+static void leon3_cache_control_int(void)
+{
+    uint32_t state = 0;
+
+    if (env->cache_control & CACHE_CTRL_IF) {
+        /* Instruction cache state */
+        state = env->cache_control & CACHE_STATE_MASK;
+        if (state == CACHE_ENABLED) {
+            state = CACHE_FROZEN;
+            DPRINTF_CACHE_CONTROL("Instruction cache: freeze\n");
+        }
+
+        env->cache_control &= ~CACHE_STATE_MASK;
+        env->cache_control |= state;
+    }
+
+    if (env->cache_control & CACHE_CTRL_DF) {
+        /* Data cache state */
+        state = (env->cache_control >> 2) & CACHE_STATE_MASK;
+        if (state == CACHE_ENABLED) {
+            state = CACHE_FROZEN;
+            DPRINTF_CACHE_CONTROL("Data cache: freeze\n");
+        }
+
+        env->cache_control &= ~(CACHE_STATE_MASK << 2);
+        env->cache_control |= (state << 2);
+    }
+}
+
+static void leon3_cache_control_st(target_ulong addr, uint64_t val, int size)
+{
+    DPRINTF_CACHE_CONTROL("st addr:%08x, val:%" PRIx64 ", size:%d\n",
+                          addr, val, size);
+
+    if (size != 4) {
+        DPRINTF_CACHE_CONTROL("32bits only\n");
+        return;
+    }
+
+    switch (addr) {
+    case 0x00:              /* Cache control */
+
+        /* These values must always be read as zeros */
+        val &= ~CACHE_CTRL_FD;
+        val &= ~CACHE_CTRL_FI;
+        val &= ~CACHE_CTRL_IB;
+        val &= ~CACHE_CTRL_IP;
+        val &= ~CACHE_CTRL_DP;
+
+        env->cache_control = val;
+        break;
+    case 0x04:              /* Instruction cache configuration */
+    case 0x08:              /* Data cache configuration */
+        /* Read Only */
+        break;
+    default:
+        DPRINTF_CACHE_CONTROL("write unknown register %08x\n", addr);
+        break;
+    };
+}
+
+static uint64_t leon3_cache_control_ld(target_ulong addr, int size)
+{
+    uint64_t ret = 0;
+
+    if (size != 4) {
+        DPRINTF_CACHE_CONTROL("32bits only\n");
+        return 0;
+    }
+
+    switch (addr) {
+    case 0x00:              /* Cache control */
+        ret = env->cache_control;
+        break;
+
+        /* Configuration registers are read and only always keep those
+           predefined values */
+
+    case 0x04:              /* Instruction cache configuration */
+        ret = 0x10220000;
+        break;
+    case 0x08:              /* Data cache configuration */
+        ret = 0x18220000;
+        break;
+    default:
+        DPRINTF_CACHE_CONTROL("read unknown register %08x\n", addr);
+        break;
+    };
+    DPRINTF_CACHE_CONTROL("ld addr:%08x, ret:0x%" PRIx64 ", size:%d\n",
+                          addr, ret, size);
+    return ret;
+}
+
+void leon3_irq_manager(void *irq_manager, int intno)
+{
+    leon3_irq_ack(irq_manager, intno);
+    leon3_cache_control_int();
+}
+
 uint64_t helper_ld_asi(target_ulong addr, int asi, int size, int sign)
 {
     uint64_t ret = 0;
@@ -1346,8 +1761,15 @@ uint64_t helper_ld_asi(target_ulong addr, int asi, int size, int sign)
 
     helper_check_align(addr, size - 1);
     switch (asi) {
-    case 2: /* SuperSparc MXCC registers */
+    case 2: /* SuperSparc MXCC registers and Leon3 cache control */
         switch (addr) {
+        case 0x00:          /* Leon3 Cache Control */
+        case 0x08:          /* Leon3 Instruction Cache config */
+        case 0x0C:          /* Leon3 Date Cache config */
+            if (env->def->features & CPU_FEATURE_CACHE_CTRL) {
+                ret = leon3_cache_control_ld(addr, size);
+            }
+            break;
         case 0x01c00a00: /* MXCC control register */
             if (size == 8)
                 ret = env->mxccregs[3];
@@ -1518,6 +1940,7 @@ uint64_t helper_ld_asi(target_ulong addr, int asi, int size, int sign)
     case 0x31: // Turbosparc RAM snoop
     case 0x32: // Turbosparc page table descriptor diagnostic
     case 0x39: /* data cache diagnostic register */
+    case 0x4c: /* SuperSPARC MMU Breakpoint Action register */
         ret = 0;
         break;
     case 0x38: /* SuperSPARC MMU Breakpoint Control Registers */
@@ -1574,8 +1997,16 @@ void helper_st_asi(target_ulong addr, uint64_t val, int asi, int size)
 {
     helper_check_align(addr, size - 1);
     switch(asi) {
-    case 2: /* SuperSparc MXCC registers */
+    case 2: /* SuperSparc MXCC registers and Leon3 cache control */
         switch (addr) {
+        case 0x00:          /* Leon3 Cache Control */
+        case 0x08:          /* Leon3 Instruction Cache config */
+        case 0x0C:          /* Leon3 Date Cache config */
+            if (env->def->features & CPU_FEATURE_CACHE_CTRL) {
+                leon3_cache_control_st(addr, val, size);
+            }
+            break;
+
         case 0x01c00000: /* MXCC stream data register 0 */
             if (size == 8)
                 env->mxccdata[0] = val;
@@ -1695,7 +2126,7 @@ void helper_st_asi(target_ulong addr, uint64_t val, int asi, int size)
                 break;
             }
 #ifdef DEBUG_MMU
-            dump_mmu(env);
+            dump_mmu(stdout, fprintf, env);
 #endif
         }
         break;
@@ -1747,7 +2178,7 @@ void helper_st_asi(target_ulong addr, uint64_t val, int asi, int size)
                             reg, oldreg, env->mmuregs[reg]);
             }
 #ifdef DEBUG_MMU
-            dump_mmu(env);
+            dump_mmu(stdout, fprintf, env);
 #endif
         }
         break;
@@ -1923,7 +2354,7 @@ uint64_t helper_ld_asi(target_ulong addr, int asi, int size, int sign)
         raise_exception(TT_PRIV_ACT);
 
     helper_check_align(addr, size - 1);
-    address_mask(env, &addr);
+    addr = asi_address_mask(env, asi, addr);
 
     switch (asi) {
     case 0x82: // Primary no-fault
@@ -2026,7 +2457,7 @@ void helper_st_asi(target_ulong addr, target_ulong val, int asi, int size)
         raise_exception(TT_PRIV_ACT);
 
     helper_check_align(addr, size - 1);
-    address_mask(env, &addr);
+    addr = asi_address_mask(env, asi, addr);
 
     /* Convert to little endian */
     switch (asi) {
@@ -2097,31 +2528,44 @@ uint64_t helper_ld_asi(target_ulong addr, int asi, int size, int sign)
     asi &= 0xff;
 
     if ((asi < 0x80 && (env->pstate & PS_PRIV) == 0)
-        || ((env->def->features & CPU_FEATURE_HYPV)
+        || (cpu_has_hypervisor(env)
             && asi >= 0x30 && asi < 0x80
             && !(env->hpstate & HS_PRIV)))
         raise_exception(TT_PRIV_ACT);
 
     helper_check_align(addr, size - 1);
+    addr = asi_address_mask(env, asi, addr);
+
     switch (asi) {
     case 0x82: // Primary no-fault
     case 0x8a: // Primary no-fault LE
-        if (cpu_get_phys_page_debug(env, addr) == -1ULL) {
+    case 0x83: // Secondary no-fault
+    case 0x8b: // Secondary no-fault LE
+        {
+            /* secondary space access has lowest asi bit equal to 1 */
+            int access_mmu_idx = ( asi & 1 ) ? MMU_KERNEL_IDX
+                                             : MMU_KERNEL_SECONDARY_IDX;
+
+            if (cpu_get_phys_page_nofault(env, addr, access_mmu_idx) == -1ULL) {
 #ifdef DEBUG_ASI
-            dump_asi("read ", last_addr, asi, size, ret);
+                dump_asi("read ", last_addr, asi, size, ret);
 #endif
-            return 0;
+                return 0;
+            }
         }
         // Fall through
     case 0x10: // As if user primary
+    case 0x11: // As if user secondary
     case 0x18: // As if user primary LE
+    case 0x19: // As if user secondary LE
     case 0x80: // Primary
+    case 0x81: // Secondary
     case 0x88: // Primary LE
+    case 0x89: // Secondary LE
     case 0xe2: // UA2007 Primary block init
     case 0xe3: // UA2007 Secondary block init
         if ((asi & 0x80) && (env->pstate & PS_PRIV)) {
-            if ((env->def->features & CPU_FEATURE_HYPV)
-                && env->hpstate & HS_PRIV) {
+            if (cpu_hypervisor_mode(env)) {
                 switch(size) {
                 case 1:
                     ret = ldub_hypv(addr);
@@ -2138,37 +2582,75 @@ uint64_t helper_ld_asi(target_ulong addr, int asi, int size, int sign)
                     break;
                 }
             } else {
-                switch(size) {
-                case 1:
-                    ret = ldub_kernel(addr);
-                    break;
-                case 2:
-                    ret = lduw_kernel(addr);
-                    break;
-                case 4:
-                    ret = ldl_kernel(addr);
-                    break;
-                default:
-                case 8:
-                    ret = ldq_kernel(addr);
-                    break;
+                /* secondary space access has lowest asi bit equal to 1 */
+                if (asi & 1) {
+                    switch(size) {
+                    case 1:
+                        ret = ldub_kernel_secondary(addr);
+                        break;
+                    case 2:
+                        ret = lduw_kernel_secondary(addr);
+                        break;
+                    case 4:
+                        ret = ldl_kernel_secondary(addr);
+                        break;
+                    default:
+                    case 8:
+                        ret = ldq_kernel_secondary(addr);
+                        break;
+                    }
+                } else {
+                    switch(size) {
+                    case 1:
+                        ret = ldub_kernel(addr);
+                        break;
+                    case 2:
+                        ret = lduw_kernel(addr);
+                        break;
+                    case 4:
+                        ret = ldl_kernel(addr);
+                        break;
+                    default:
+                    case 8:
+                        ret = ldq_kernel(addr);
+                        break;
+                    }
                 }
             }
         } else {
-            switch(size) {
-            case 1:
-                ret = ldub_user(addr);
-                break;
-            case 2:
-                ret = lduw_user(addr);
-                break;
-            case 4:
-                ret = ldl_user(addr);
-                break;
-            default:
-            case 8:
-                ret = ldq_user(addr);
-                break;
+            /* secondary space access has lowest asi bit equal to 1 */
+            if (asi & 1) {
+                switch(size) {
+                case 1:
+                    ret = ldub_user_secondary(addr);
+                    break;
+                case 2:
+                    ret = lduw_user_secondary(addr);
+                    break;
+                case 4:
+                    ret = ldl_user_secondary(addr);
+                    break;
+                default:
+                case 8:
+                    ret = ldq_user_secondary(addr);
+                    break;
+                }
+            } else {
+                switch(size) {
+                case 1:
+                    ret = ldub_user(addr);
+                    break;
+                case 2:
+                    ret = lduw_user(addr);
+                    break;
+                case 4:
+                    ret = ldl_user(addr);
+                    break;
+                default:
+                case 8:
+                    ret = ldq_user(addr);
+                    break;
+                }
             }
         }
         break;
@@ -2199,22 +2681,27 @@ uint64_t helper_ld_asi(target_ulong addr, int asi, int size, int sign)
         //  Only ldda allowed
         raise_exception(TT_ILL_INSN);
         return 0;
-    case 0x83: // Secondary no-fault
-    case 0x8b: // Secondary no-fault LE
-        if (cpu_get_phys_page_debug(env, addr) == -1ULL) {
-#ifdef DEBUG_ASI
-            dump_asi("read ", last_addr, asi, size, ret);
-#endif
-            return 0;
-        }
-        // Fall through
     case 0x04: // Nucleus
     case 0x0c: // Nucleus Little Endian (LE)
-    case 0x11: // As if user secondary
-    case 0x19: // As if user secondary LE
+    {
+        switch(size) {
+        case 1:
+            ret = ldub_nucleus(addr);
+            break;
+        case 2:
+            ret = lduw_nucleus(addr);
+            break;
+        case 4:
+            ret = ldl_nucleus(addr);
+            break;
+        default:
+        case 8:
+            ret = ldq_nucleus(addr);
+            break;
+        }
+        break;
+    }
     case 0x4a: // UPA config
-    case 0x81: // Secondary
-    case 0x89: // Secondary LE
         // XXX
         break;
     case 0x45: // LSU
@@ -2394,12 +2881,14 @@ void helper_st_asi(target_ulong addr, target_ulong val, int asi, int size)
     asi &= 0xff;
 
     if ((asi < 0x80 && (env->pstate & PS_PRIV) == 0)
-        || ((env->def->features & CPU_FEATURE_HYPV)
+        || (cpu_has_hypervisor(env)
             && asi >= 0x30 && asi < 0x80
             && !(env->hpstate & HS_PRIV)))
         raise_exception(TT_PRIV_ACT);
 
     helper_check_align(addr, size - 1);
+    addr = asi_address_mask(env, asi, addr);
+
     /* Convert to little endian */
     switch (asi) {
     case 0x0c: // Nucleus Little Endian (LE)
@@ -2428,14 +2917,17 @@ void helper_st_asi(target_ulong addr, target_ulong val, int asi, int size)
 
     switch(asi) {
     case 0x10: // As if user primary
+    case 0x11: // As if user secondary
     case 0x18: // As if user primary LE
+    case 0x19: // As if user secondary LE
     case 0x80: // Primary
+    case 0x81: // Secondary
     case 0x88: // Primary LE
+    case 0x89: // Secondary LE
     case 0xe2: // UA2007 Primary block init
     case 0xe3: // UA2007 Secondary block init
         if ((asi & 0x80) && (env->pstate & PS_PRIV)) {
-            if ((env->def->features & CPU_FEATURE_HYPV)
-                && env->hpstate & HS_PRIV) {
+            if (cpu_hypervisor_mode(env)) {
                 switch(size) {
                 case 1:
                     stb_hypv(addr, val);
@@ -2452,37 +2944,75 @@ void helper_st_asi(target_ulong addr, target_ulong val, int asi, int size)
                     break;
                 }
             } else {
-                switch(size) {
-                case 1:
-                    stb_kernel(addr, val);
-                    break;
-                case 2:
-                    stw_kernel(addr, val);
-                    break;
-                case 4:
-                    stl_kernel(addr, val);
-                    break;
-                case 8:
-                default:
-                    stq_kernel(addr, val);
-                    break;
+                /* secondary space access has lowest asi bit equal to 1 */
+                if (asi & 1) {
+                    switch(size) {
+                    case 1:
+                        stb_kernel_secondary(addr, val);
+                        break;
+                    case 2:
+                        stw_kernel_secondary(addr, val);
+                        break;
+                    case 4:
+                        stl_kernel_secondary(addr, val);
+                        break;
+                    case 8:
+                    default:
+                        stq_kernel_secondary(addr, val);
+                        break;
+                    }
+                } else {
+                    switch(size) {
+                    case 1:
+                        stb_kernel(addr, val);
+                        break;
+                    case 2:
+                        stw_kernel(addr, val);
+                        break;
+                    case 4:
+                        stl_kernel(addr, val);
+                        break;
+                    case 8:
+                    default:
+                        stq_kernel(addr, val);
+                        break;
+                    }
                 }
             }
         } else {
-            switch(size) {
-            case 1:
-                stb_user(addr, val);
-                break;
-            case 2:
-                stw_user(addr, val);
-                break;
-            case 4:
-                stl_user(addr, val);
-                break;
-            case 8:
-            default:
-                stq_user(addr, val);
-                break;
+            /* secondary space access has lowest asi bit equal to 1 */
+            if (asi & 1) {
+                switch(size) {
+                case 1:
+                    stb_user_secondary(addr, val);
+                    break;
+                case 2:
+                    stw_user_secondary(addr, val);
+                    break;
+                case 4:
+                    stl_user_secondary(addr, val);
+                    break;
+                case 8:
+                default:
+                    stq_user_secondary(addr, val);
+                    break;
+                }
+            } else {
+                switch(size) {
+                case 1:
+                    stb_user(addr, val);
+                    break;
+                case 2:
+                    stw_user(addr, val);
+                    break;
+                case 4:
+                    stl_user(addr, val);
+                    break;
+                case 8:
+                default:
+                    stq_user(addr, val);
+                    break;
+                }
             }
         }
         break;
@@ -2515,11 +3045,26 @@ void helper_st_asi(target_ulong addr, target_ulong val, int asi, int size)
         return;
     case 0x04: // Nucleus
     case 0x0c: // Nucleus Little Endian (LE)
-    case 0x11: // As if user secondary
-    case 0x19: // As if user secondary LE
+    {
+        switch(size) {
+        case 1:
+            stb_nucleus(addr, val);
+            break;
+        case 2:
+            stw_nucleus(addr, val);
+            break;
+        case 4:
+            stl_nucleus(addr, val);
+            break;
+        default:
+        case 8:
+            stq_nucleus(addr, val);
+            break;
+        }
+        break;
+    }
+
     case 0x4a: // UPA config
-    case 0x81: // Secondary
-    case 0x89: // Secondary LE
         // XXX
         return;
     case 0x45: // LSU
@@ -2534,7 +3079,7 @@ void helper_st_asi(target_ulong addr, target_ulong val, int asi, int size)
                 DPRINTF_MMU("LSU change: 0x%" PRIx64 " -> 0x%" PRIx64 "\n",
                             oldreg, env->lsu);
 #ifdef DEBUG_MMU
-                dump_mmu(env);
+                dump_mmu(stdout, fprintf, env1);
 #endif
                 tlb_flush(env, 1);
             }
@@ -2579,7 +3124,7 @@ void helper_st_asi(target_ulong addr, target_ulong val, int asi, int size)
                             PRIx64 "\n", reg, oldreg, env->immuregs[reg]);
             }
 #ifdef DEBUG_MMU
-            dump_mmu(env);
+            dump_mmu(stdout, fprintf, env);
 #endif
             return;
         }
@@ -2596,12 +3141,12 @@ void helper_st_asi(target_ulong addr, target_ulong val, int asi, int size)
 
 #ifdef DEBUG_MMU
             DPRINTF_MMU("immu data access replaced entry [%i]\n", i);
-            dump_mmu(env);
+            dump_mmu(stdout, fprintf, env);
 #endif
             return;
         }
     case 0x57: // I-MMU demap
-        demap_tlb(env->itlb, val, "immu", env);
+        demap_tlb(env->itlb, addr, "immu", env);
         return;
     case 0x58: // D-MMU regs
         {
@@ -2622,9 +3167,15 @@ void helper_st_asi(target_ulong addr, target_ulong val, int asi, int size)
                 break;
             case 1: // Primary context
                 env->dmmu.mmu_primary_context = val;
+                /* can be optimized to only flush MMU_USER_IDX
+                   and MMU_KERNEL_IDX entries */
+                tlb_flush(env, 1);
                 break;
             case 2: // Secondary context
                 env->dmmu.mmu_secondary_context = val;
+                /* can be optimized to only flush MMU_USER_SECONDARY_IDX
+                   and MMU_KERNEL_SECONDARY_IDX entries */
+                tlb_flush(env, 1);
                 break;
             case 5: // TSB access
                 DPRINTF_MMU("dmmu TSB write: 0x%016" PRIx64 " -> 0x%016"
@@ -2646,7 +3197,7 @@ void helper_st_asi(target_ulong addr, target_ulong val, int asi, int size)
                             PRIx64 "\n", reg, oldreg, env->dmmuregs[reg]);
             }
 #ifdef DEBUG_MMU
-            dump_mmu(env);
+            dump_mmu(stdout, fprintf, env);
 #endif
             return;
         }
@@ -2661,12 +3212,12 @@ void helper_st_asi(target_ulong addr, target_ulong val, int asi, int size)
 
 #ifdef DEBUG_MMU
             DPRINTF_MMU("dmmu data access replaced entry [%i]\n", i);
-            dump_mmu(env);
+            dump_mmu(stdout, fprintf, env);
 #endif
             return;
         }
     case 0x5f: // D-MMU demap
-        demap_tlb(env->dtlb, val, "dmmu", env);
+        demap_tlb(env->dtlb, addr, "dmmu", env);
         return;
     case 0x49: // Interrupt data receive
         // XXX
@@ -2707,35 +3258,39 @@ void helper_st_asi(target_ulong addr, target_ulong val, int asi, int size)
 void helper_ldda_asi(target_ulong addr, int asi, int rd)
 {
     if ((asi < 0x80 && (env->pstate & PS_PRIV) == 0)
-        || ((env->def->features & CPU_FEATURE_HYPV)
+        || (cpu_has_hypervisor(env)
             && asi >= 0x30 && asi < 0x80
             && !(env->hpstate & HS_PRIV)))
         raise_exception(TT_PRIV_ACT);
 
+    addr = asi_address_mask(env, asi, addr);
+
     switch (asi) {
+#if !defined(CONFIG_USER_ONLY)
     case 0x24: // Nucleus quad LDD 128 bit atomic
     case 0x2c: // Nucleus quad LDD 128 bit atomic LE
         helper_check_align(addr, 0xf);
         if (rd == 0) {
-            env->gregs[1] = ldq_kernel(addr + 8);
+            env->gregs[1] = ldq_nucleus(addr + 8);
             if (asi == 0x2c)
                 bswap64s(&env->gregs[1]);
         } else if (rd < 8) {
-            env->gregs[rd] = ldq_kernel(addr);
-            env->gregs[rd + 1] = ldq_kernel(addr + 8);
+            env->gregs[rd] = ldq_nucleus(addr);
+            env->gregs[rd + 1] = ldq_nucleus(addr + 8);
             if (asi == 0x2c) {
                 bswap64s(&env->gregs[rd]);
                 bswap64s(&env->gregs[rd + 1]);
             }
         } else {
-            env->regwptr[rd] = ldq_kernel(addr);
-            env->regwptr[rd + 1] = ldq_kernel(addr + 8);
+            env->regwptr[rd] = ldq_nucleus(addr);
+            env->regwptr[rd + 1] = ldq_nucleus(addr + 8);
             if (asi == 0x2c) {
                 bswap64s(&env->regwptr[rd]);
                 bswap64s(&env->regwptr[rd + 1]);
             }
         }
         break;
+#endif
     default:
         helper_check_align(addr, 0x3);
         if (rd == 0)
@@ -2757,6 +3312,8 @@ void helper_ldf_asi(target_ulong addr, int asi, int size, int rd)
     target_ulong val;
 
     helper_check_align(addr, 3);
+    addr = asi_address_mask(env, asi, addr);
+
     switch (asi) {
     case 0xf0: // Block load primary
     case 0xf1: // Block load secondary
@@ -2769,6 +3326,20 @@ void helper_ldf_asi(target_ulong addr, int asi, int size, int rd)
         helper_check_align(addr, 0x3f);
         for (i = 0; i < 16; i++) {
             *(uint32_t *)&env->fpr[rd++] = helper_ld_asi(addr, asi & 0x8f, 4,
+                                                         0);
+            addr += 4;
+        }
+
+        return;
+    case 0x70: // Block load primary, user privilege
+    case 0x71: // Block load secondary, user privilege
+        if (rd & 7) {
+            raise_exception(TT_ILL_INSN);
+            return;
+        }
+        helper_check_align(addr, 0x3f);
+        for (i = 0; i < 16; i++) {
+            *(uint32_t *)&env->fpr[rd++] = helper_ld_asi(addr, asi & 0x1f, 4,
                                                          0);
             addr += 4;
         }
@@ -2799,6 +3370,8 @@ void helper_stf_asi(target_ulong addr, int asi, int size, int rd)
     target_ulong val = 0;
 
     helper_check_align(addr, 3);
+    addr = asi_address_mask(env, asi, addr);
+
     switch (asi) {
     case 0xe0: // UA2007 Block commit store primary (cache flush)
     case 0xe1: // UA2007 Block commit store secondary (cache flush)
@@ -2814,6 +3387,20 @@ void helper_stf_asi(target_ulong addr, int asi, int size, int rd)
         for (i = 0; i < 16; i++) {
             val = *(uint32_t *)&env->fpr[rd++];
             helper_st_asi(addr, val, asi & 0x8f, 4);
+            addr += 4;
+        }
+
+        return;
+    case 0x70: // Block store primary, user privilege
+    case 0x71: // Block store secondary, user privilege
+        if (rd & 7) {
+            raise_exception(TT_ILL_INSN);
+            return;
+        }
+        helper_check_align(addr, 0x3f);
+        for (i = 0; i < 16; i++) {
+            val = *(uint32_t *)&env->fpr[rd++];
+            helper_st_asi(addr, val, asi & 0x1f, 4);
             addr += 4;
         }
 
@@ -2871,7 +3458,7 @@ void helper_rett(void)
         raise_exception(TT_ILL_INSN);
 
     env->psret = 1;
-    cwp = cpu_cwp_inc(env, env->cwp + 1) ;
+    cwp = cwp_inc(env->cwp + 1) ;
     if (env->wim & (1 << cwp)) {
         raise_exception(TT_WIN_UNF);
     }
@@ -2880,13 +3467,14 @@ void helper_rett(void)
 }
 #endif
 
-target_ulong helper_udiv(target_ulong a, target_ulong b)
+static target_ulong helper_udiv_common(target_ulong a, target_ulong b, int cc)
 {
+    int overflow = 0;
     uint64_t x0;
     uint32_t x1;
 
     x0 = (a & 0xffffffff) | ((int64_t) (env->y) << 32);
-    x1 = b;
+    x1 = (b & 0xffffffff);
 
     if (x1 == 0) {
         raise_exception(TT_DIV_ZERO);
@@ -2894,21 +3482,36 @@ target_ulong helper_udiv(target_ulong a, target_ulong b)
 
     x0 = x0 / x1;
     if (x0 > 0xffffffff) {
-        env->cc_src2 = 1;
-        return 0xffffffff;
-    } else {
-        env->cc_src2 = 0;
-        return x0;
+        x0 = 0xffffffff;
+        overflow = 1;
     }
+
+    if (cc) {
+        env->cc_dst = x0;
+        env->cc_src2 = overflow;
+        env->cc_op = CC_OP_DIV;
+    }
+    return x0;
 }
 
-target_ulong helper_sdiv(target_ulong a, target_ulong b)
+target_ulong helper_udiv(target_ulong a, target_ulong b)
 {
+    return helper_udiv_common(a, b, 0);
+}
+
+target_ulong helper_udiv_cc(target_ulong a, target_ulong b)
+{
+    return helper_udiv_common(a, b, 1);
+}
+
+static target_ulong helper_sdiv_common(target_ulong a, target_ulong b, int cc)
+{
+    int overflow = 0;
     int64_t x0;
     int32_t x1;
 
     x0 = (a & 0xffffffff) | ((int64_t) (env->y) << 32);
-    x1 = b;
+    x1 = (b & 0xffffffff);
 
     if (x1 == 0) {
         raise_exception(TT_DIV_ZERO);
@@ -2916,12 +3519,26 @@ target_ulong helper_sdiv(target_ulong a, target_ulong b)
 
     x0 = x0 / x1;
     if ((int32_t) x0 != x0) {
-        env->cc_src2 = 1;
-        return x0 < 0? 0x80000000: 0x7fffffff;
-    } else {
-        env->cc_src2 = 0;
-        return x0;
+        x0 = x0 < 0 ? 0x80000000: 0x7fffffff;
+        overflow = 1;
     }
+
+    if (cc) {
+        env->cc_dst = x0;
+        env->cc_src2 = overflow;
+        env->cc_op = CC_OP_DIV;
+    }
+    return x0;
+}
+
+target_ulong helper_sdiv(target_ulong a, target_ulong b)
+{
+    return helper_sdiv_common(a, b, 0);
+}
+
+target_ulong helper_sdiv_cc(target_ulong a, target_ulong b)
+{
+    return helper_sdiv_common(a, b, 1);
 }
 
 void helper_stdf(target_ulong addr, int mem_idx)
@@ -2929,23 +3546,23 @@ void helper_stdf(target_ulong addr, int mem_idx)
     helper_check_align(addr, 7);
 #if !defined(CONFIG_USER_ONLY)
     switch (mem_idx) {
-    case 0:
+    case MMU_USER_IDX:
         stfq_user(addr, DT0);
         break;
-    case 1:
+    case MMU_KERNEL_IDX:
         stfq_kernel(addr, DT0);
         break;
 #ifdef TARGET_SPARC64
-    case 2:
+    case MMU_HYPV_IDX:
         stfq_hypv(addr, DT0);
         break;
 #endif
     default:
+        DPRINTF_MMU("helper_stdf: need to check MMU idx %d\n", mem_idx);
         break;
     }
 #else
-    address_mask(env, &addr);
-    stfq_raw(addr, DT0);
+    stfq_raw(address_mask(env, addr), DT0);
 #endif
 }
 
@@ -2954,23 +3571,23 @@ void helper_lddf(target_ulong addr, int mem_idx)
     helper_check_align(addr, 7);
 #if !defined(CONFIG_USER_ONLY)
     switch (mem_idx) {
-    case 0:
+    case MMU_USER_IDX:
         DT0 = ldfq_user(addr);
         break;
-    case 1:
+    case MMU_KERNEL_IDX:
         DT0 = ldfq_kernel(addr);
         break;
 #ifdef TARGET_SPARC64
-    case 2:
+    case MMU_HYPV_IDX:
         DT0 = ldfq_hypv(addr);
         break;
 #endif
     default:
+        DPRINTF_MMU("helper_lddf: need to check MMU idx %d\n", mem_idx);
         break;
     }
 #else
-    address_mask(env, &addr);
-    DT0 = ldfq_raw(addr);
+    DT0 = ldfq_raw(address_mask(env, addr));
 #endif
 }
 
@@ -2982,30 +3599,30 @@ void helper_ldqf(target_ulong addr, int mem_idx)
     helper_check_align(addr, 7);
 #if !defined(CONFIG_USER_ONLY)
     switch (mem_idx) {
-    case 0:
+    case MMU_USER_IDX:
         u.ll.upper = ldq_user(addr);
         u.ll.lower = ldq_user(addr + 8);
         QT0 = u.q;
         break;
-    case 1:
+    case MMU_KERNEL_IDX:
         u.ll.upper = ldq_kernel(addr);
         u.ll.lower = ldq_kernel(addr + 8);
         QT0 = u.q;
         break;
 #ifdef TARGET_SPARC64
-    case 2:
+    case MMU_HYPV_IDX:
         u.ll.upper = ldq_hypv(addr);
         u.ll.lower = ldq_hypv(addr + 8);
         QT0 = u.q;
         break;
 #endif
     default:
+        DPRINTF_MMU("helper_ldqf: need to check MMU idx %d\n", mem_idx);
         break;
     }
 #else
-    address_mask(env, &addr);
-    u.ll.upper = ldq_raw(addr);
-    u.ll.lower = ldq_raw((addr + 8) & 0xffffffffULL);
+    u.ll.upper = ldq_raw(address_mask(env, addr));
+    u.ll.lower = ldq_raw(address_mask(env, addr + 8));
     QT0 = u.q;
 #endif
 }
@@ -3018,31 +3635,31 @@ void helper_stqf(target_ulong addr, int mem_idx)
     helper_check_align(addr, 7);
 #if !defined(CONFIG_USER_ONLY)
     switch (mem_idx) {
-    case 0:
+    case MMU_USER_IDX:
         u.q = QT0;
         stq_user(addr, u.ll.upper);
         stq_user(addr + 8, u.ll.lower);
         break;
-    case 1:
+    case MMU_KERNEL_IDX:
         u.q = QT0;
         stq_kernel(addr, u.ll.upper);
         stq_kernel(addr + 8, u.ll.lower);
         break;
 #ifdef TARGET_SPARC64
-    case 2:
+    case MMU_HYPV_IDX:
         u.q = QT0;
         stq_hypv(addr, u.ll.upper);
         stq_hypv(addr + 8, u.ll.lower);
         break;
 #endif
     default:
+        DPRINTF_MMU("helper_stqf: need to check MMU idx %d\n", mem_idx);
         break;
     }
 #else
     u.q = QT0;
-    address_mask(env, &addr);
-    stq_raw(addr, u.ll.upper);
-    stq_raw((addr + 8) & 0xffffffffULL, u.ll.lower);
+    stq_raw(address_mask(env, addr), u.ll.upper);
+    stq_raw(address_mask(env, addr + 8), u.ll.lower);
 #endif
 }
 
@@ -3095,7 +3712,7 @@ void helper_save(void)
 {
     uint32_t cwp;
 
-    cwp = cpu_cwp_dec(env, env->cwp - 1);
+    cwp = cwp_dec(env->cwp - 1);
     if (env->wim & (1 << cwp)) {
         raise_exception(TT_WIN_OVF);
     }
@@ -3106,7 +3723,7 @@ void helper_restore(void)
 {
     uint32_t cwp;
 
-    cwp = cpu_cwp_inc(env, env->cwp + 1);
+    cwp = cwp_inc(env->cwp + 1);
     if (env->wim & (1 << cwp)) {
         raise_exception(TT_WIN_UNF);
     }
@@ -3115,15 +3732,16 @@ void helper_restore(void)
 
 void helper_wrpsr(target_ulong new_psr)
 {
-    if ((new_psr & PSR_CWP) >= env->nwindows)
+    if ((new_psr & PSR_CWP) >= env->nwindows) {
         raise_exception(TT_ILL_INSN);
-    else
-        PUT_PSR(env, new_psr);
+    } else {
+        cpu_put_psr(env, new_psr);
+    }
 }
 
 target_ulong helper_rdpsr(void)
 {
-    return GET_PSR(env);
+    return get_psr();
 }
 
 #else
@@ -3133,7 +3751,7 @@ void helper_save(void)
 {
     uint32_t cwp;
 
-    cwp = cpu_cwp_dec(env, env->cwp - 1);
+    cwp = cwp_dec(env->cwp - 1);
     if (env->cansave == 0) {
         raise_exception(TT_SPILL | (env->otherwin != 0 ?
                                     (TT_WOTHER | ((env->wstate & 0x38) >> 1)):
@@ -3154,7 +3772,7 @@ void helper_restore(void)
 {
     uint32_t cwp;
 
-    cwp = cpu_cwp_inc(env, env->cwp + 1);
+    cwp = cwp_inc(env->cwp + 1);
     if (env->canrestore == 0) {
         raise_exception(TT_FILL | (env->otherwin != 0 ?
                                    (TT_WOTHER | ((env->wstate & 0x38) >> 1)):
@@ -3195,26 +3813,101 @@ void helper_restored(void)
         env->otherwin--;
 }
 
+static target_ulong get_ccr(void)
+{
+    target_ulong psr;
+
+    psr = get_psr();
+
+    return ((env->xcc >> 20) << 4) | ((psr & PSR_ICC) >> 20);
+}
+
+target_ulong cpu_get_ccr(CPUState *env1)
+{
+    CPUState *saved_env;
+    target_ulong ret;
+
+    saved_env = env;
+    env = env1;
+    ret = get_ccr();
+    env = saved_env;
+    return ret;
+}
+
+static void put_ccr(target_ulong val)
+{
+    target_ulong tmp = val;
+
+    env->xcc = (tmp >> 4) << 20;
+    env->psr = (tmp & 0xf) << 20;
+    CC_OP = CC_OP_FLAGS;
+}
+
+void cpu_put_ccr(CPUState *env1, target_ulong val)
+{
+    CPUState *saved_env;
+
+    saved_env = env;
+    env = env1;
+    put_ccr(val);
+    env = saved_env;
+}
+
+static target_ulong get_cwp64(void)
+{
+    return env->nwindows - 1 - env->cwp;
+}
+
+target_ulong cpu_get_cwp64(CPUState *env1)
+{
+    CPUState *saved_env;
+    target_ulong ret;
+
+    saved_env = env;
+    env = env1;
+    ret = get_cwp64();
+    env = saved_env;
+    return ret;
+}
+
+static void put_cwp64(int cwp)
+{
+    if (unlikely(cwp >= env->nwindows || cwp < 0)) {
+        cwp %= env->nwindows;
+    }
+    set_cwp(env->nwindows - 1 - cwp);
+}
+
+void cpu_put_cwp64(CPUState *env1, int cwp)
+{
+    CPUState *saved_env;
+
+    saved_env = env;
+    env = env1;
+    put_cwp64(cwp);
+    env = saved_env;
+}
+
 target_ulong helper_rdccr(void)
 {
-    return GET_CCR(env);
+    return get_ccr();
 }
 
 void helper_wrccr(target_ulong new_ccr)
 {
-    PUT_CCR(env, new_ccr);
+    put_ccr(new_ccr);
 }
 
 // CWP handling is reversed in V9, but we still use the V8 register
 // order.
 target_ulong helper_rdcwp(void)
 {
-    return GET_CWP64(env);
+    return get_cwp64();
 }
 
 void helper_wrcwp(target_ulong new_cwp)
 {
-    PUT_CWP64(env, new_cwp);
+    put_cwp64(new_cwp);
 }
 
 // This function uses non-native bit order
@@ -3334,10 +4027,10 @@ void helper_done(void)
 
     env->pc = tsptr->tnpc;
     env->npc = tsptr->tnpc + 4;
-    PUT_CCR(env, tsptr->tstate >> 32);
+    put_ccr(tsptr->tstate >> 32);
     env->asi = (tsptr->tstate >> 24) & 0xff;
     change_pstate((tsptr->tstate >> 8) & 0xf3f);
-    PUT_CWP64(env, tsptr->tstate & 0xff);
+    put_cwp64(tsptr->tstate & 0xff);
     env->tl--;
 
     DPRINTF_PSTATE("... helper_done tl=%d\n", env->tl);
@@ -3355,10 +4048,10 @@ void helper_retry(void)
 
     env->pc = tsptr->tpc;
     env->npc = tsptr->tnpc;
-    PUT_CCR(env, tsptr->tstate >> 32);
+    put_ccr(tsptr->tstate >> 32);
     env->asi = (tsptr->tstate >> 24) & 0xff;
     change_pstate((tsptr->tstate >> 8) & 0xf3f);
-    PUT_CWP64(env, tsptr->tstate & 0xff);
+    put_cwp64(tsptr->tstate & 0xff);
     env->tl--;
 
     DPRINTF_PSTATE("... helper_retry tl=%d\n", env->tl);
@@ -3509,9 +4202,9 @@ void do_interrupt(CPUState *env)
     }
     tsptr = cpu_tsptr(env);
 
-    tsptr->tstate = ((uint64_t)GET_CCR(env) << 32) |
+    tsptr->tstate = (get_ccr() << 32) |
         ((env->asi & 0xff) << 24) | ((env->pstate & 0xf3f) << 8) |
-        GET_CWP64(env);
+        get_cwp64();
     tsptr->tpc = env->pc;
     tsptr->tnpc = env->npc;
     tsptr->tt = intno;
@@ -3532,12 +4225,13 @@ void do_interrupt(CPUState *env)
         break;
     }
 
-    if (intno == TT_CLRWIN)
-        cpu_set_cwp(env, cpu_cwp_dec(env, env->cwp - 1));
-    else if ((intno & 0x1c0) == TT_SPILL)
-        cpu_set_cwp(env, cpu_cwp_dec(env, env->cwp - env->cansave - 2));
-    else if ((intno & 0x1c0) == TT_FILL)
-        cpu_set_cwp(env, cpu_cwp_inc(env, env->cwp + 1));
+    if (intno == TT_CLRWIN) {
+        set_cwp(cwp_dec(env->cwp - 1));
+    } else if ((intno & 0x1c0) == TT_SPILL) {
+        set_cwp(cwp_dec(env->cwp - env->cansave - 2));
+    } else if ((intno & 0x1c0) == TT_FILL) {
+        set_cwp(cwp_inc(env->cwp + 1));
+    }
     env->tbr &= ~0x7fffULL;
     env->tbr |= ((env->tl > 1) ? 1 << 14 : 0) | (intno << 5);
     env->pc = env->tbr;
@@ -3628,8 +4322,8 @@ void do_interrupt(CPUState *env)
     }
 #endif
     env->psret = 0;
-    cwp = cpu_cwp_dec(env, env->cwp - 1);
-    cpu_set_cwp(env, cwp);
+    cwp = cwp_dec(env->cwp - 1);
+    set_cwp(cwp);
     env->regwptr[9] = env->pc;
     env->regwptr[10] = env->npc;
     env->psrps = env->psrs;
@@ -3638,6 +4332,13 @@ void do_interrupt(CPUState *env)
     env->pc = env->tbr;
     env->npc = env->pc + 4;
     env->exception_index = -1;
+
+#if !defined(CONFIG_USER_ONLY)
+    /* IRQ acknowledgment */
+    if ((intno & ~15) == TT_EXTINT && env->qemu_irq_ack != NULL) {
+        env->qemu_irq_ack(env->irq_manager, intno);
+    }
+#endif
 }
 #endif
 
@@ -3674,7 +4375,7 @@ static void cpu_restore_state2(void *retaddr)
         if (tb) {
             /* the PC is inside the translated code. It means that we have
                a virtual CPU fault */
-            cpu_restore_state(tb, env, pc, (void *)(long)env->cond);
+            cpu_restore_state(tb, env, pc);
         }
     }
 }

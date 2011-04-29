@@ -57,23 +57,6 @@ static void pci_grackle_set_irq(void *opaque, int irq_num, int level)
     qemu_set_irq(pic[irq_num + 0x15], level);
 }
 
-static void pci_grackle_save(QEMUFile* f, void *opaque)
-{
-    PCIDevice *d = opaque;
-
-    pci_device_save(d, f);
-}
-
-static int pci_grackle_load(QEMUFile* f, void *opaque, int version_id)
-{
-    PCIDevice *d = opaque;
-
-    if (version_id != 1)
-        return -EINVAL;
-
-    return pci_device_load(d, f);
-}
-
 static void pci_grackle_reset(void *opaque)
 {
 }
@@ -108,13 +91,13 @@ static int pci_grackle_init_device(SysBusDevice *dev)
 
     s = FROM_SYSBUS(GrackleState, dev);
 
-    pci_mem_config = pci_host_conf_register_mmio(&s->host_state, 1);
-    pci_mem_data = pci_host_data_register_mmio(&s->host_state, 1);
+    pci_mem_config = pci_host_conf_register_mmio(&s->host_state,
+                                                 DEVICE_LITTLE_ENDIAN);
+    pci_mem_data = pci_host_data_register_mmio(&s->host_state,
+                                               DEVICE_LITTLE_ENDIAN);
     sysbus_init_mmio(dev, 0x1000, pci_mem_config);
     sysbus_init_mmio(dev, 0x1000, pci_mem_data);
 
-    register_savevm("grackle", 0, 1, pci_grackle_save, pci_grackle_load,
-                    &s->host_state);
     qemu_register_reset(pci_grackle_reset, &s->host_state);
     return 0;
 }
@@ -126,7 +109,6 @@ static int grackle_pci_host_init(PCIDevice *d)
     d->config[0x08] = 0x00; // revision
     d->config[0x09] = 0x01;
     pci_config_set_class(d->config, PCI_CLASS_BRIDGE_HOST);
-    d->config[PCI_HEADER_TYPE] = PCI_HEADER_TYPE_NORMAL; // header_type
     return 0;
 }
 

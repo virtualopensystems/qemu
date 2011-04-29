@@ -38,10 +38,11 @@ DEF_HELPER_2(mulldo, i64, i64, i64)
 
 DEF_HELPER_FLAGS_1(cntlzw, TCG_CALL_CONST | TCG_CALL_PURE, tl, tl)
 DEF_HELPER_FLAGS_1(popcntb, TCG_CALL_CONST | TCG_CALL_PURE, tl, tl)
+DEF_HELPER_FLAGS_1(popcntw, TCG_CALL_CONST | TCG_CALL_PURE, tl, tl)
 DEF_HELPER_2(sraw, tl, tl, tl)
 #if defined(TARGET_PPC64)
 DEF_HELPER_FLAGS_1(cntlzd, TCG_CALL_CONST | TCG_CALL_PURE, tl, tl)
-DEF_HELPER_FLAGS_1(popcntb_64, TCG_CALL_CONST | TCG_CALL_PURE, tl, tl)
+DEF_HELPER_FLAGS_1(popcntd, TCG_CALL_CONST | TCG_CALL_PURE, tl, tl)
 DEF_HELPER_2(srad, tl, tl, tl)
 #endif
 
@@ -95,6 +96,7 @@ DEF_HELPER_3(fsel, i64, i64, i64, i64)
 
 #define dh_alias_avr ptr
 #define dh_ctype_avr ppc_avr_t *
+#define dh_is_signed_avr dh_is_signed_ptr
 
 DEF_HELPER_3(vaddubm, void, avr, avr, avr)
 DEF_HELPER_3(vadduhm, void, avr, avr, avr)
@@ -245,6 +247,7 @@ DEF_HELPER_2(vrefp, void, avr, avr)
 DEF_HELPER_2(vrsqrtefp, void, avr, avr)
 DEF_HELPER_4(vmaddfp, void, avr, avr, avr, avr)
 DEF_HELPER_4(vnmsubfp, void, avr, avr, avr, avr)
+DEF_HELPER_2(vexptefp, void, avr, avr)
 DEF_HELPER_2(vlogefp, void, avr, avr)
 DEF_HELPER_2(vrfim, void, avr, avr)
 DEF_HELPER_2(vrfin, void, avr, avr)
@@ -338,8 +341,9 @@ DEF_HELPER_1(74xx_tlbi, void, tl)
 DEF_HELPER_FLAGS_0(tlbia, TCG_CALL_CONST, void)
 DEF_HELPER_FLAGS_1(tlbie, TCG_CALL_CONST, void, tl)
 #if defined(TARGET_PPC64)
-DEF_HELPER_FLAGS_1(load_slb, TCG_CALL_CONST, tl, tl)
 DEF_HELPER_FLAGS_2(store_slb, TCG_CALL_CONST, void, tl, tl)
+DEF_HELPER_1(load_slb_esid, tl, tl)
+DEF_HELPER_1(load_slb_vsid, tl, tl)
 DEF_HELPER_FLAGS_0(slbia, TCG_CALL_CONST, void)
 DEF_HELPER_FLAGS_1(slbie, TCG_CALL_CONST, void, tl)
 #endif
@@ -373,6 +377,7 @@ DEF_HELPER_0(load_601_rtcu, tl)
 #if !defined(CONFIG_USER_ONLY)
 #if defined(TARGET_PPC64)
 DEF_HELPER_1(store_asr, void, tl)
+DEF_HELPER_0(load_purr, tl)
 #endif
 DEF_HELPER_1(store_sdr1, void, tl)
 DEF_HELPER_1(store_tbl, void, tl)

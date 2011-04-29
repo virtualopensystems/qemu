@@ -512,7 +512,7 @@ static inline uint8_t fat_chksum(const direntry_t* entry)
     for(i=0;i<11;i++) {
         unsigned char c;
 
-        c = (i <= 8) ? entry->name[i] : entry->extension[i-8];
+        c = (i < 8) ? entry->name[i] : entry->extension[i-8];
         chksum=(((chksum&0xfe)>>1)|((chksum&0x01)?0x80:0)) + c;
     }
 
@@ -756,6 +756,7 @@ static int read_directory(BDRVVVFATState* s, int mapping_index)
         if (st.st_size > 0x7fffffff) {
 	    fprintf(stderr, "File %s is larger than 2GB\n", buffer);
 	    free(buffer);
+            closedir(dir);
 	    return -2;
         }
 	direntry->size=cpu_to_le32(S_ISDIR(st.st_mode)?0:st.st_size);
@@ -1099,8 +1100,8 @@ static inline void vvfat_close_current_file(BDRVVVFATState *s)
  */
 static inline int find_mapping_for_cluster_aux(BDRVVVFATState* s,int cluster_num,int index1,int index2)
 {
-    int index3=index1+1;
     while(1) {
+        int index3;
 	mapping_t* mapping;
 	index3=(index1+index2)/2;
 	mapping=array_get(&(s->mapping),index3);
@@ -1244,7 +1245,7 @@ static void print_direntry(const direntry_t* direntry)
     int j = 0;
     char buffer[1024];
 
-    fprintf(stderr, "direntry 0x%x: ", (int)direntry);
+    fprintf(stderr, "direntry %p: ", direntry);
     if(!direntry)
 	return;
     if(is_long_name(direntry)) {
@@ -1273,7 +1274,11 @@ static void print_direntry(const direntry_t* direntry)
 
 static void print_mapping(const mapping_t* mapping)
 {
-    fprintf(stderr, "mapping (0x%x): begin, end = %d, %d, dir_index = %d, first_mapping_index = %d, name = %s, mode = 0x%x, " , (int)mapping, mapping->begin, mapping->end, mapping->dir_index, mapping->first_mapping_index, mapping->path, mapping->mode);
+    fprintf(stderr, "mapping (%p): begin, end = %d, %d, dir_index = %d, "
+        "first_mapping_index = %d, name = %s, mode = 0x%x, " ,
+        mapping, mapping->begin, mapping->end, mapping->dir_index,
+        mapping->first_mapping_index, mapping->path, mapping->mode);
+
     if (mapping->mode & MODE_DIRECTORY)
 	fprintf(stderr, "parent_mapping_index = %d, first_dir_index = %d\n", mapping->info.dir.parent_mapping_index, mapping->info.dir.first_dir_index);
     else
@@ -2278,7 +2283,6 @@ static void check1(BDRVVVFATState* s)
 	    fprintf(stderr, "deleted\n");
 	    continue;
 	}
-	assert(mapping->dir_index >= 0);
 	assert(mapping->dir_index < s->directory.next);
 	direntry_t* direntry = array_get(&(s->directory), mapping->dir_index);
 	assert(mapping->begin == begin_of_direntry(direntry) || mapping->first_mapping_index >= 0);
@@ -2661,6 +2665,11 @@ static int vvfat_write(BlockDriverState *bs, int64_t sector_num,
 
 DLOG(checkpoint());
 
+    /* Check if we're operating in read-only mode */
+    if (s->qcow == NULL) {
+        return -EACCES;
+    }
+
     vvfat_close_current_file(s);
 
     /*
@@ -2759,12 +2768,12 @@ static int vvfat_is_allocated(BlockDriverState *bs,
 
 static int write_target_commit(BlockDriverState *bs, int64_t sector_num,
 	const uint8_t* buffer, int nb_sectors) {
-    BDRVVVFATState* s = bs->opaque;
+    BDRVVVFATState* s = *((BDRVVVFATState**) bs->opaque);
     return try_commit(s);
 }
 
 static void write_target_close(BlockDriverState *bs) {
-    BDRVVVFATState* s = bs->opaque;
+    BDRVVVFATState* s = *((BDRVVVFATState**) bs->opaque);
     bdrv_delete(s->qcow);
     free(s->qcow_filename);
 }
@@ -2779,6 +2788,7 @@ static int enable_write_target(BDRVVVFATState *s)
 {
     BlockDriver *bdrv_qcow;
     QEMUOptionParameter *options;
+    int ret;
     int size = sector2cluster(s, s->sector_count);
     s->used_clusters = calloc(size, 1);
 
@@ -2794,9 +2804,17 @@ static int enable_write_target(BDRVVVFATState *s)
 
     if (bdrv_create(bdrv_qcow, s->qcow_filename, options) < 0)
 	return -1;
+
     s->qcow = bdrv_new("");
-    if (s->qcow == NULL || bdrv_open(s->qcow, s->qcow_filename, BDRV_O_RDWR) < 0)
-	return -1;
+    if (s->qcow == NULL) {
+        return -1;
+    }
+
+    ret = bdrv_open(s->qcow, s->qcow_filename,
+            BDRV_O_RDWR | BDRV_O_CACHE_WB | BDRV_O_NO_FLUSH, bdrv_qcow);
+    if (ret < 0) {
+	return ret;
+    }
 
 #ifndef _WIN32
     unlink(s->qcow_filename);
@@ -2804,7 +2822,8 @@ static int enable_write_target(BDRVVVFATState *s)
 
     s->bs->backing_hd = calloc(sizeof(BlockDriverState), 1);
     s->bs->backing_hd->drv = &vvfat_write_target;
-    s->bs->backing_hd->opaque = s;
+    s->bs->backing_hd->opaque = qemu_malloc(sizeof(void*));
+    *(void**)s->bs->backing_hd->opaque = s;
 
     return 0;
 }
@@ -2824,7 +2843,7 @@ static void vvfat_close(BlockDriverState *bs)
 static BlockDriver bdrv_vvfat = {
     .format_name	= "vvfat",
     .instance_size	= sizeof(BDRVVVFATState),
-    .bdrv_open		= vvfat_open,
+    .bdrv_file_open	= vvfat_open,
     .bdrv_read		= vvfat_read,
     .bdrv_write		= vvfat_write,
     .bdrv_close		= vvfat_close,
@@ -2862,7 +2881,7 @@ static void checkpoint(void) {
     return;
     /* avoid compiler warnings: */
     hexdump(NULL, 100);
-    remove_mapping(vvv, NULL);
+    remove_mapping(vvv, 0);
     print_mapping(NULL);
     print_direntry(NULL);
 }

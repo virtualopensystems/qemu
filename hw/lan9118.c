@@ -10,6 +10,7 @@
 #include "sysbus.h"
 #include "net.h"
 #include "devices.h"
+#include "sysemu.h"
 /* For crc32 */
 #include <zlib.h>
 
@@ -186,7 +187,7 @@ typedef struct {
     uint32_t phy_int_mask;
 
     int eeprom_writable;
-    uint8_t eeprom[8];
+    uint8_t eeprom[128];
 
     int tx_fifo_size;
     LAN9118Packet *txp;
@@ -326,7 +327,7 @@ static void lan9118_reset(DeviceState *d)
     s->afc_cfg = 0;
     s->e2p_cmd = 0;
     s->e2p_data = 0;
-    s->free_timer_start = qemu_get_clock(vm_clock) / 40;
+    s->free_timer_start = qemu_get_clock_ns(vm_clock) / 40;
 
     ptimer_stop(s->timer);
     ptimer_set_count(s->timer, 0xffff);
@@ -784,6 +785,12 @@ static void do_mac_write(lan9118_state *s, int reg, uint32_t val)
     case MAC_FLOW:
         s->mac_flow = val & 0xffff0000;
         break;
+    case MAC_VLAN1:
+        /* Writing to this register changes a condition for
+         * FrameTooLong bit in rx_status.  Since we do not set
+         * FrameTooLong anyway, just ignore write to this.
+         */
+        break;
     default:
         hw_error("lan9118: Unimplemented MAC register write: %d = 0x%x\n",
                  s->mac_cmd & 0xf, val);
@@ -1002,7 +1009,7 @@ static void lan9118_writel(void *opaque, target_phys_addr_t offset,
         s->afc_cfg = val & 0x00ffffff;
         break;
     case CSR_E2P_CMD:
-        lan9118_eeprom_cmd(s, (val >> 28) & 7, val & 0xff);
+        lan9118_eeprom_cmd(s, (val >> 28) & 7, val & 0x7f);
         break;
     case CSR_E2P_DATA:
         s->e2p_data = val & 0xff;
@@ -1069,7 +1076,7 @@ static uint32_t lan9118_readl(void *opaque, target_phys_addr_t offset)
     case CSR_WORD_SWAP:
         return s->word_swap;
     case CSR_FREE_RUN:
-        return (qemu_get_clock(vm_clock) / 40) - s->free_timer_start;
+        return (qemu_get_clock_ns(vm_clock) / 40) - s->free_timer_start;
     case CSR_RX_DROP:
         /* TODO: Implement dropped frames counter.  */
         return 0;
@@ -1123,7 +1130,8 @@ static int lan9118_init1(SysBusDevice *dev)
     int i;
 
     s->mmio_index = cpu_register_io_memory(lan9118_readfn,
-                                           lan9118_writefn, s);
+                                           lan9118_writefn, s,
+                                           DEVICE_NATIVE_ENDIAN);
     sysbus_init_mmio(dev, 0x100, s->mmio_index);
     sysbus_init_irq(dev, &s->irq);
     qemu_macaddr_default_if_unset(&s->conf.macaddr);

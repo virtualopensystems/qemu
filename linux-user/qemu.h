@@ -31,6 +31,7 @@
  * task_struct fields in the kernel
  */
 struct image_info {
+        abi_ulong       load_bias;
         abi_ulong       load_addr;
         abi_ulong       start_code;
         abi_ulong       end_code;
@@ -42,14 +43,21 @@ struct image_info {
         abi_ulong       mmap;
         abi_ulong       rss;
         abi_ulong       start_stack;
+        abi_ulong       stack_limit;
         abi_ulong       entry;
         abi_ulong       code_offset;
         abi_ulong       data_offset;
         abi_ulong       saved_auxv;
         abi_ulong       arg_start;
         abi_ulong       arg_end;
-        char            **host_argv;
 	int		personality;
+#ifdef CONFIG_USE_FDPIC
+        abi_ulong       loadmap_addr;
+        uint16_t        nsegs;
+        void           *loadsegs;
+        abi_ulong       pt_dynamic_addr;
+        struct image_info *other_info;
+#endif
 };
 
 #ifdef TARGET_I386
@@ -97,6 +105,9 @@ typedef struct TaskState {
     FPA11 fpa;
     int swi_errno;
 #endif
+#ifdef TARGET_UNICORE32
+    int swi_errno;
+#endif
 #if defined(TARGET_I386) && !defined(TARGET_X86_64)
     abi_ulong target_v86;
     struct vm86_saved_state vm86_saved_regs;
@@ -110,7 +121,7 @@ typedef struct TaskState {
 #ifdef TARGET_M68K
     int sim_syscalls;
 #endif
-#if defined(TARGET_ARM) || defined(TARGET_M68K)
+#if defined(TARGET_ARM) || defined(TARGET_M68K) || defined(TARGET_UNICORE32)
     /* Extra fields for semihosted binaries.  */
     uint32_t stack_base;
     uint32_t heap_base;
@@ -124,8 +135,6 @@ typedef struct TaskState {
     struct sigqueue sigqueue_table[MAX_SIGQUEUE_SIZE]; /* siginfo queue */
     struct sigqueue *first_free; /* first free siginfo queue entry */
     int signal_pending; /* non zero if a signal may be pending */
-
-    uint8_t stack[0];
 } __attribute__((aligned(16))) TaskState;
 
 extern char *exec_path;
@@ -143,12 +152,16 @@ extern unsigned long mmap_min_addr;
  */
 #define MAX_ARG_PAGES 33
 
+/* Read a good amount of data initially, to hopefully get all the
+   program headers loaded.  */
+#define BPRM_BUF_SIZE  1024
+
 /*
  * This structure is used to hold the arguments that are
  * used when loading binaries.
  */
 struct linux_binprm {
-        char buf[128];
+        char buf[BPRM_BUF_SIZE] __attribute__((aligned));
         void *page[MAX_ARG_PAGES];
         abi_ulong p;
 	int fd;
@@ -171,11 +184,6 @@ int load_elf_binary(struct linux_binprm * bprm, struct target_pt_regs * regs,
                     struct image_info * info);
 int load_flt_binary(struct linux_binprm * bprm, struct target_pt_regs * regs,
                     struct image_info * info);
-#ifdef TARGET_HAS_ELFLOAD32
-int load_elf_binary_multi(struct linux_binprm *bprm,
-                          struct target_pt_regs *regs,
-                          struct image_info *info);
-#endif
 
 abi_long memcpy_to_target(abi_ulong dest, const void *src,
                           unsigned long len);
@@ -185,7 +193,7 @@ void syscall_init(void);
 abi_long do_syscall(void *cpu_env, int num, abi_long arg1,
                     abi_long arg2, abi_long arg3, abi_long arg4,
                     abi_long arg5, abi_long arg6);
-void gemu_log(const char *fmt, ...) __attribute__((format(printf,1,2)));
+void gemu_log(const char *fmt, ...) GCC_FMT_ATTR(1, 2);
 extern THREAD CPUState *thread_env;
 void cpu_loop(CPUState *env);
 char *target_strerror(int err);
@@ -265,8 +273,7 @@ static inline int access_ok(int type, abi_ulong addr, abi_ulong size)
  */
 #define __put_user(x, hptr)\
 ({\
-    int size = sizeof(*hptr);\
-    switch(size) {\
+    switch(sizeof(*hptr)) {\
     case 1:\
         *(uint8_t *)(hptr) = (uint8_t)(typeof(*hptr))(x);\
         break;\
@@ -287,8 +294,7 @@ static inline int access_ok(int type, abi_ulong addr, abi_ulong size)
 
 #define __get_user(x, hptr) \
 ({\
-    int size = sizeof(*hptr);\
-    switch(size) {\
+    switch(sizeof(*hptr)) {\
     case 1:\
         x = (typeof(*hptr))*(uint8_t *)(hptr);\
         break;\

@@ -1,5 +1,5 @@
 /*
- * QError: QEMU Error data-type.
+ * QError Module
  *
  * Copyright (C) 2009 Red Hat Inc.
  *
@@ -38,6 +38,10 @@ static const QType qerror_type = {
  * for example:
  *
  * "running out of foo: %(foo)%%"
+ *
+ * Please keep the entries in alphabetical order.
+ * Use "sed -n '/^static.*qerror_table\[\]/,/^};/s/QERR_/&/gp' qerror.c | sort -c"
+ * to check.
  */
 static const QErrorStringTable qerror_table[] = {
     {
@@ -65,8 +69,8 @@ static const QErrorStringTable qerror_table[] = {
         .desc      = "Device '%(device)' could not be initialized",
     },
     {
-        .error_fmt = QERR_DEVICE_NOT_ENCRYPTED,
-        .desc      = "Device '%(device)' is not encrypted",
+        .error_fmt = QERR_DEVICE_IN_USE,
+        .desc      = "Device '%(device)' is in use",
     },
     {
         .error_fmt = QERR_DEVICE_LOCKED,
@@ -78,7 +82,11 @@ static const QErrorStringTable qerror_table[] = {
     },
     {
         .error_fmt = QERR_DEVICE_NOT_ACTIVE,
-        .desc      = "Device '%(device)' has not been activated by the guest",
+        .desc      = "Device '%(device)' has not been activated",
+    },
+    {
+        .error_fmt = QERR_DEVICE_NOT_ENCRYPTED,
+        .desc      = "Device '%(device)' is not encrypted",
     },
     {
         .error_fmt = QERR_DEVICE_NOT_FOUND,
@@ -91,6 +99,14 @@ static const QErrorStringTable qerror_table[] = {
     {
         .error_fmt = QERR_DEVICE_NO_BUS,
         .desc      = "Device '%(device)' has no child bus",
+    },
+    {
+        .error_fmt = QERR_DEVICE_NO_HOTPLUG,
+        .desc      = "Device '%(device)' does not support hotplugging",
+    },
+    {
+        .error_fmt = QERR_DUPLICATE_ID,
+        .desc      = "Duplicate ID '%(id)' for %(object)",
     },
     {
         .error_fmt = QERR_FD_NOT_FOUND,
@@ -113,6 +129,10 @@ static const QErrorStringTable qerror_table[] = {
         .desc      = "Invalid parameter type, expected: %(expected)",
     },
     {
+        .error_fmt = QERR_INVALID_PARAMETER_VALUE,
+        .desc      = "Parameter '%(name)' expects %(expected)",
+    },
+    {
         .error_fmt = QERR_INVALID_PASSWORD,
         .desc      = "Password incorrect",
     },
@@ -123,6 +143,10 @@ static const QErrorStringTable qerror_table[] = {
     {
         .error_fmt = QERR_KVM_MISSING_CAP,
         .desc      = "Using KVM without %(capability), %(feature) unavailable",
+    },
+    {
+        .error_fmt = QERR_MIGRATION_EXPECTED,
+        .desc      = "An incoming migration is expected before this command can be executed",
     },
     {
         .error_fmt = QERR_MISSING_PARAMETER,
@@ -154,7 +178,15 @@ static const QErrorStringTable qerror_table[] = {
     },
     {
         .error_fmt = QERR_QMP_BAD_INPUT_OBJECT,
-        .desc      = "Bad QMP input object",
+        .desc      = "Expected '%(expected)' in QMP input",
+    },
+    {
+        .error_fmt = QERR_QMP_BAD_INPUT_OBJECT_MEMBER,
+        .desc      = "QMP input object member '%(member)' expects '%(expected)'",
+    },
+    {
+        .error_fmt = QERR_QMP_EXTRA_MEMBER,
+        .desc      = "QMP input object member '%(member)' is unexpected",
     },
     {
         .error_fmt = QERR_SET_PASSWD_FAILED,
@@ -167,6 +199,11 @@ static const QErrorStringTable qerror_table[] = {
     {
         .error_fmt = QERR_UNDEFINED_ERROR,
         .desc      = "An undefined error has ocurred",
+    },
+    {
+        .error_fmt = QERR_UNKNOWN_BLOCK_FORMAT_FEATURE,
+        .desc      = "'%(device)' uses a %(format) feature which is not "
+                     "supported by this qemu version: %(feature)",
     },
     {
         .error_fmt = QERR_VNC_SERVER_FAILED,
@@ -190,7 +227,8 @@ QError *qerror_new(void)
     return qerr;
 }
 
-static void qerror_abort(const QError *qerr, const char *fmt, ...)
+static void GCC_FMT_ATTR(2, 3) qerror_abort(const QError *qerr,
+                                            const char *fmt, ...)
 {
     va_list ap;
 
@@ -205,7 +243,8 @@ static void qerror_abort(const QError *qerr, const char *fmt, ...)
     abort();
 }
 
-static void qerror_set_data(QError *qerr, const char *fmt, va_list *va)
+static void GCC_FMT_ATTR(2, 0) qerror_set_data(QError *qerr,
+                                               const char *fmt, va_list *va)
 {
     QObject *obj;
 

@@ -13,8 +13,8 @@
 
 #include "qemu-common.h"
 #include "qemu-error.h"
-#include "block.h"
 #include "scsi.h"
+#include "blockdev.h"
 
 #ifdef __linux__
 
@@ -96,17 +96,17 @@ static void scsi_command_complete(void *opaque, int ret)
         s->senselen = r->io_header.sb_len_wr;
 
     if (ret != 0)
-        r->req.status = BUSY << 1;
+        r->req.status = BUSY;
     else {
         if (s->driver_status & SG_ERR_DRIVER_TIMEOUT) {
-            r->req.status = BUSY << 1;
+            r->req.status = BUSY;
             BADF("Driver Timeout\n");
         } else if (r->io_header.status)
             r->req.status = r->io_header.status;
         else if (s->driver_status & SG_ERR_DRIVER_SENSE)
-            r->req.status = CHECK_CONDITION << 1;
+            r->req.status = CHECK_CONDITION;
         else
-            r->req.status = GOOD << 1;
+            r->req.status = GOOD;
     }
     DPRINTF("Command complete 0x%p tag=0x%x status=%d\n",
             r, r->req.tag, r->req.status);
@@ -164,7 +164,7 @@ static void scsi_read_complete(void * opaque, int ret)
     int len;
 
     if (ret) {
-        DPRINTF("IO error\n");
+        DPRINTF("IO error ret %d\n", ret);
         scsi_command_complete(r, ret);
         return;
     }
@@ -236,7 +236,7 @@ static void scsi_write_complete(void * opaque, int ret)
     if (r->req.cmd.buf[0] == MODE_SELECT && r->req.cmd.buf[4] == 12 &&
         s->qdev.type == TYPE_TAPE) {
         s->qdev.blocksize = (r->buf[9] << 16) | (r->buf[10] << 8) | r->buf[11];
-        DPRINTF("block size %d\n", s->blocksize);
+        DPRINTF("block size %d\n", s->qdev.blocksize);
     }
 
     scsi_command_complete(r, ret);
@@ -333,7 +333,7 @@ static int32_t scsi_send_command(SCSIDevice *d, uint32_t tag,
         s->senselen = 7;
         s->driver_status = SG_ERR_DRIVER_SENSE;
         bus = scsi_bus_from_device(d);
-        bus->complete(bus, SCSI_REASON_DONE, tag, CHECK_CONDITION << 1);
+        bus->complete(bus, SCSI_REASON_DONE, tag, CHECK_CONDITION);
         return 0;
     }
 
@@ -351,8 +351,18 @@ static int32_t scsi_send_command(SCSIDevice *d, uint32_t tag,
     }
     scsi_req_fixup(&r->req);
 
-    DPRINTF("Command: lun=%d tag=0x%x data=0x%02x len %d\n", lun, tag,
-            cmd[0], r->req.cmd.xfer);
+    DPRINTF("Command: lun=%d tag=0x%x len %zd data=0x%02x", lun, tag,
+            r->req.cmd.xfer, cmd[0]);
+
+#ifdef DEBUG_SCSI
+    {
+        int i;
+        for (i = 1; i < r->req.cmd.len; i++) {
+            printf(" 0x%02x", cmd[i]);
+        }
+        printf("\n");
+    }
+#endif
 
     if (r->req.cmd.xfer == 0) {
         if (r->buf != NULL)
@@ -445,16 +455,32 @@ static int get_stream_blocksize(BlockDriverState *bdrv)
     return (buf[9] << 16) | (buf[10] << 8) | buf[11];
 }
 
-static void scsi_destroy(SCSIDevice *d)
+static void scsi_generic_purge_requests(SCSIGenericState *s)
 {
-    SCSIGenericState *s = DO_UPCAST(SCSIGenericState, qdev, d);
     SCSIGenericReq *r;
 
     while (!QTAILQ_EMPTY(&s->qdev.requests)) {
         r = DO_UPCAST(SCSIGenericReq, req, QTAILQ_FIRST(&s->qdev.requests));
+        if (r->req.aiocb) {
+            bdrv_aio_cancel(r->req.aiocb);
+        }
         scsi_remove_request(r);
     }
-    drive_uninit(s->qdev.conf.dinfo);
+}
+
+static void scsi_generic_reset(DeviceState *dev)
+{
+    SCSIGenericState *s = DO_UPCAST(SCSIGenericState, qdev.qdev, dev);
+
+    scsi_generic_purge_requests(s);
+}
+
+static void scsi_destroy(SCSIDevice *d)
+{
+    SCSIGenericState *s = DO_UPCAST(SCSIGenericState, qdev, d);
+
+    scsi_generic_purge_requests(s);
+    blockdev_mark_auto_del(s->qdev.conf.bs);
 }
 
 static int scsi_generic_initfn(SCSIDevice *dev)
@@ -463,15 +489,24 @@ static int scsi_generic_initfn(SCSIDevice *dev)
     int sg_version;
     struct sg_scsi_id scsiid;
 
-    if (!s->qdev.conf.dinfo || !s->qdev.conf.dinfo->bdrv) {
+    if (!s->qdev.conf.bs) {
         error_report("scsi-generic: drive property not set");
         return -1;
     }
-    s->bs = s->qdev.conf.dinfo->bdrv;
+    s->bs = s->qdev.conf.bs;
 
     /* check we are really using a /dev/sg* file */
     if (!bdrv_is_sg(s->bs)) {
         error_report("scsi-generic: not /dev/sg*");
+        return -1;
+    }
+
+    if (bdrv_get_on_error(s->bs, 0) != BLOCK_ERR_STOP_ENOSPC) {
+        error_report("Device doesn't support drive option werror");
+        return -1;
+    }
+    if (bdrv_get_on_error(s->bs, 1) != BLOCK_ERR_REPORT) {
+        error_report("Device doesn't support drive option rerror");
         return -1;
     }
 
@@ -510,6 +545,7 @@ static int scsi_generic_initfn(SCSIDevice *dev)
     DPRINTF("block size %d\n", s->qdev.blocksize);
     s->driver_status = 0;
     memset(s->sensebuf, 0, sizeof(s->sensebuf));
+    bdrv_set_removable(s->bs, 0);
     return 0;
 }
 
@@ -517,6 +553,7 @@ static SCSIDeviceInfo scsi_generic_info = {
     .qdev.name    = "scsi-generic",
     .qdev.desc    = "pass through generic scsi device (/dev/sg*)",
     .qdev.size    = sizeof(SCSIGenericState),
+    .qdev.reset   = scsi_generic_reset,
     .init         = scsi_generic_initfn,
     .destroy      = scsi_destroy,
     .send_command = scsi_send_command,

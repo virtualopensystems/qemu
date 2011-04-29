@@ -8,6 +8,7 @@
 #define CPUState struct CPUMIPSState
 
 #include "config.h"
+#include "qemu-common.h"
 #include "mips-defs.h"
 #include "cpu-defs.h"
 #include "softfloat.h"
@@ -62,7 +63,7 @@ union fpr_t {
     uint32_t w[2]; /* binary single fixed-point */
 };
 /* define FP_ENDIAN_IDX to access the same location
- * in the fpr_t union regardless of the host endianess
+ * in the fpr_t union regardless of the host endianness
  */
 #if defined(HOST_WORDS_BIGENDIAN)
 #  define FP_ENDIAN_IDX 1
@@ -363,6 +364,7 @@ struct CPUMIPSState {
 #define CP0C2_SA   0
     int32_t CP0_Config3;
 #define CP0C3_M    31
+#define CP0C3_ISA_ON_EXC 16
 #define CP0C3_DSPP 10
 #define CP0C3_LPA  7
 #define CP0C3_VEIC 6
@@ -495,7 +497,7 @@ void do_unassigned_access(target_phys_addr_t addr, int is_write, int is_exec,
                           int unused, int size);
 #endif
 
-void mips_cpu_list (FILE *f, int (*cpu_fprintf)(FILE *f, const char *fmt, ...));
+void mips_cpu_list (FILE *f, fprintf_function cpu_fprintf);
 
 #define cpu_init cpu_mips_init
 #define cpu_exec cpu_mips_exec
@@ -524,8 +526,38 @@ static inline void cpu_clone_regs(CPUState *env, target_ulong newsp)
     env->active_tc.gpr[2] = 0;
 }
 
+static inline int cpu_mips_hw_interrupts_pending(CPUState *env)
+{
+    int32_t pending;
+    int32_t status;
+    int r;
+
+    if (!(env->CP0_Status & (1 << CP0St_IE)) ||
+        (env->CP0_Status & (1 << CP0St_EXL)) ||
+        (env->CP0_Status & (1 << CP0St_ERL)) ||
+        (env->hflags & MIPS_HFLAG_DM)) {
+        /* Interrupts are disabled */
+        return 0;
+    }
+
+    pending = env->CP0_Cause & CP0Ca_IP_mask;
+    status = env->CP0_Status & CP0Ca_IP_mask;
+
+    if (env->CP0_Config3 & (1 << CP0C3_VEIC)) {
+        /* A MIPS configured with a vectorizing external interrupt controller
+           will feed a vector into the Cause pending lines. The core treats
+           the status lines as a vector level, not as indiviual masks.  */
+        r = pending > status;
+    } else {
+        /* A MIPS configured with compatibility or VInt (Vectored Interrupts)
+           treats the pending lines as individual interrupt lines, the status
+           lines are individual masks.  */
+        r = pending & status;
+    }
+    return r;
+}
+
 #include "cpu-all.h"
-#include "exec-all.h"
 
 /* Memory access type :
  * may be needed for precise access rights control and precise exceptions.
@@ -598,7 +630,7 @@ void cpu_mips_start_count(CPUState *env);
 void cpu_mips_stop_count(CPUState *env);
 
 /* mips_int.c */
-void cpu_mips_update_irq (CPUState *env);
+void cpu_mips_soft_irq(CPUState *env, int irq, int level);
 
 /* helper.c */
 int cpu_mips_handle_mmu_fault (CPUState *env, target_ulong address, int rw,
@@ -610,13 +642,6 @@ void r4k_invalidate_tlb (CPUState *env, int idx, int use_extra);
 target_phys_addr_t cpu_mips_translate_address (CPUState *env, target_ulong address,
 		                               int rw);
 #endif
-
-static inline void cpu_pc_from_tb(CPUState *env, TranslationBlock *tb)
-{
-    env->active_tc.PC = tb->pc;
-    env->hflags &= ~MIPS_HFLAG_BMASK;
-    env->hflags |= tb->flags & MIPS_HFLAG_BMASK;
-}
 
 static inline void cpu_get_tb_cpu_state(CPUState *env, target_ulong *pc,
                                         target_ulong *cs_base, int *flags)

@@ -123,7 +123,7 @@ static void alarm_cb (void *opaque)
         /* Repeat once a second */
         next_time = 1;
     }
-    qemu_mod_timer(NVRAM->alrm_timer, qemu_get_clock(vm_clock) +
+    qemu_mod_timer(NVRAM->alrm_timer, qemu_get_clock_ns(vm_clock) +
                     next_time * 1000);
     qemu_set_irq(NVRAM->IRQ, 0);
 }
@@ -585,28 +585,18 @@ static CPUReadMemoryFunc * const nvram_read[] = {
     &nvram_readl,
 };
 
-static void m48t59_save(QEMUFile *f, void *opaque)
-{
-    M48t59State *s = opaque;
-
-    qemu_put_8s(f, &s->lock);
-    qemu_put_be16s(f, &s->addr);
-    qemu_put_buffer(f, s->buffer, s->size);
-}
-
-static int m48t59_load(QEMUFile *f, void *opaque, int version_id)
-{
-    M48t59State *s = opaque;
-
-    if (version_id != 1)
-        return -EINVAL;
-
-    qemu_get_8s(f, &s->lock);
-    qemu_get_be16s(f, &s->addr);
-    qemu_get_buffer(f, s->buffer, s->size);
-
-    return 0;
-}
+static const VMStateDescription vmstate_m48t59 = {
+    .name = "m48t59",
+    .version_id = 1,
+    .minimum_version_id = 1,
+    .minimum_version_id_old = 1,
+    .fields      = (VMStateField[]) {
+        VMSTATE_UINT8(lock, M48t59State),
+        VMSTATE_UINT16(addr, M48t59State),
+        VMSTATE_VBUFFER_UINT32(buffer, M48t59State, 0, NULL, 0, size),
+        VMSTATE_END_OF_LIST()
+    }
+};
 
 static void m48t59_reset_common(M48t59State *NVRAM)
 {
@@ -642,6 +632,7 @@ M48t59State *m48t59_init(qemu_irq IRQ, target_phys_addr_t mem_base,
     DeviceState *dev;
     SysBusDevice *s;
     M48t59SysBusState *d;
+    M48t59State *state;
 
     dev = qdev_create(NULL, "m48t59");
     qdev_prop_set_uint32(dev, "type", type);
@@ -649,18 +640,18 @@ M48t59State *m48t59_init(qemu_irq IRQ, target_phys_addr_t mem_base,
     qdev_prop_set_uint32(dev, "io_base", io_base);
     qdev_init_nofail(dev);
     s = sysbus_from_qdev(dev);
+    d = FROM_SYSBUS(M48t59SysBusState, s);
+    state = &d->state;
     sysbus_connect_irq(s, 0, IRQ);
     if (io_base != 0) {
-        register_ioport_read(io_base, 0x04, 1, NVRAM_readb, s);
-        register_ioport_write(io_base, 0x04, 1, NVRAM_writeb, s);
+        register_ioport_read(io_base, 0x04, 1, NVRAM_readb, state);
+        register_ioport_write(io_base, 0x04, 1, NVRAM_writeb, state);
     }
     if (mem_base != 0) {
         sysbus_mmio_map(s, 0, mem_base);
     }
 
-    d = FROM_SYSBUS(M48t59SysBusState, s);
-
-    return &d->state;
+    return state;
 }
 
 M48t59State *m48t59_init_isa(uint32_t io_base, uint16_t size, int type)
@@ -680,6 +671,7 @@ M48t59State *m48t59_init_isa(uint32_t io_base, uint16_t size, int type)
     if (io_base != 0) {
         register_ioport_read(io_base, 0x04, 1, NVRAM_readb, s);
         register_ioport_write(io_base, 0x04, 1, NVRAM_writeb, s);
+        isa_init_ioport_range(dev, io_base, 4);
     }
 
     return s;
@@ -689,12 +681,12 @@ static void m48t59_init_common(M48t59State *s)
 {
     s->buffer = qemu_mallocz(s->size);
     if (s->type == 59) {
-        s->alrm_timer = qemu_new_timer(vm_clock, &alarm_cb, s);
-        s->wd_timer = qemu_new_timer(vm_clock, &watchdog_cb, s);
+        s->alrm_timer = qemu_new_timer_ns(vm_clock, &alarm_cb, s);
+        s->wd_timer = qemu_new_timer_ns(vm_clock, &watchdog_cb, s);
     }
     qemu_get_timedate(&s->alarm, 0);
 
-    register_savevm("m48t59", -1, 1, m48t59_save, m48t59_load, s);
+    vmstate_register(NULL, -1, &vmstate_m48t59, s);
 }
 
 static int m48t59_init_isa1(ISADevice *dev)
@@ -716,7 +708,8 @@ static int m48t59_init1(SysBusDevice *dev)
 
     sysbus_init_irq(dev, &s->IRQ);
 
-    mem_index = cpu_register_io_memory(nvram_read, nvram_write, s);
+    mem_index = cpu_register_io_memory(nvram_read, nvram_write, s,
+                                       DEVICE_NATIVE_ENDIAN);
     sysbus_init_mmio(dev, s->size, mem_index);
     m48t59_init_common(s);
 

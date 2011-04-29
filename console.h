@@ -4,6 +4,8 @@
 #include "qemu-char.h"
 #include "qdict.h"
 #include "notify.h"
+#include "qerror.h"
+#include "monitor.h"
 
 /* keyboard/mouse support */
 
@@ -42,6 +44,7 @@ typedef struct QEMUPutLEDEntry {
 } QEMUPutLEDEntry;
 
 void qemu_add_kbd_event_handler(QEMUPutKBDEvent *func, void *opaque);
+void qemu_remove_kbd_event_handler(void);
 QEMUPutMouseEntry *qemu_add_mouse_event_handler(QEMUPutMouseEvent *func,
                                                 void *opaque, int absolute,
                                                 const char *name);
@@ -126,6 +129,27 @@ struct DisplaySurface {
     struct PixelFormat pf;
 };
 
+/* cursor data format is 32bit RGBA */
+typedef struct QEMUCursor {
+    int                 width, height;
+    int                 hot_x, hot_y;
+    int                 refcount;
+    uint32_t            data[];
+} QEMUCursor;
+
+QEMUCursor *cursor_alloc(int width, int height);
+void cursor_get(QEMUCursor *c);
+void cursor_put(QEMUCursor *c);
+QEMUCursor *cursor_builtin_hidden(void);
+QEMUCursor *cursor_builtin_left_ptr(void);
+void cursor_print_ascii_art(QEMUCursor *c, const char *prefix);
+int cursor_get_mono_bpl(QEMUCursor *c);
+void cursor_set_mono(QEMUCursor *c,
+                     uint32_t foreground, uint32_t background, uint8_t *image,
+                     int transparent, uint8_t *mask);
+void cursor_get_mono_image(QEMUCursor *c, int foreground, uint8_t *mask);
+void cursor_get_mono_mask(QEMUCursor *c, int transparent, uint8_t *mask);
+
 struct DisplayChangeListener {
     int idle;
     uint64_t gui_timer_interval;
@@ -158,8 +182,7 @@ struct DisplayState {
     struct DisplayChangeListener* listeners;
 
     void (*mouse_set)(int x, int y, int on);
-    void (*cursor_define)(int width, int height, int bpp, int hot_x, int hot_y,
-                          uint8_t *image, uint8_t *mask);
+    void (*cursor_define)(QEMUCursor *cursor);
 
     struct DisplayState *next;
 };
@@ -168,6 +191,8 @@ void register_displaystate(DisplayState *ds);
 DisplayState *get_displaystate(void);
 DisplaySurface* qemu_create_displaysurface_from(int width, int height, int bpp,
                                                 int linesize, uint8_t *data);
+void qemu_alloc_display(DisplaySurface *surface, int width, int height,
+                        int linesize, PixelFormat pf, int newflags);
 PixelFormat qemu_different_endianness_pixelformat(int bpp);
 PixelFormat qemu_default_pixelformat(int bpp);
 
@@ -306,7 +331,9 @@ static inline int ds_get_bytes_per_pixel(DisplayState *ds)
 typedef unsigned long console_ch_t;
 static inline void console_write_ch(console_ch_t *dest, uint32_t ch)
 {
-    cpu_to_le32wu((uint32_t *) dest, ch);
+    if (!(ch & 0xff))
+        ch |= ' ';
+    *dest = ch;
 }
 
 typedef void (*vga_hw_update_ptr)(void *);
@@ -345,10 +372,32 @@ void cocoa_display_init(DisplayState *ds, int full_screen);
 void vnc_display_init(DisplayState *ds);
 void vnc_display_close(DisplayState *ds);
 int vnc_display_open(DisplayState *ds, const char *display);
+int vnc_display_disable_login(DisplayState *ds);
+char *vnc_display_local_addr(DisplayState *ds);
+#ifdef CONFIG_VNC
 int vnc_display_password(DisplayState *ds, const char *password);
+int vnc_display_pw_expire(DisplayState *ds, time_t expires);
 void do_info_vnc_print(Monitor *mon, const QObject *data);
 void do_info_vnc(Monitor *mon, QObject **ret_data);
-char *vnc_display_local_addr(DisplayState *ds);
+#else
+static inline int vnc_display_password(DisplayState *ds, const char *password)
+{
+    qerror_report(QERR_FEATURE_DISABLED, "vnc");
+    return -ENODEV;
+}
+static inline int vnc_display_pw_expire(DisplayState *ds, time_t expires)
+{
+    qerror_report(QERR_FEATURE_DISABLED, "vnc");
+    return -ENODEV;
+};
+static inline void do_info_vnc(Monitor *mon, QObject **ret_data)
+{
+};
+static inline void do_info_vnc_print(Monitor *mon, const QObject *data)
+{
+    monitor_printf(mon, "VNC support disabled\n");
+};
+#endif
 
 /* curses.c */
 void curses_display_init(DisplayState *ds, int full_screen);

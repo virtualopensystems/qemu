@@ -26,14 +26,12 @@
 #include "boards.h"
 #include "pci.h"
 #include "net.h"
-#include "sysemu.h"
 #include "pc.h"
 #include "monitor.h"
-#include "block_int.h"
 #include "scsi.h"
 #include "virtio-blk.h"
 #include "qemu-config.h"
-#include "qemu-objects.h"
+#include "blockdev.h"
 
 #if defined(TARGET_I386)
 static PCIDevice *qemu_pci_hot_add_nic(Monitor *mon,
@@ -54,10 +52,8 @@ static PCIDevice *qemu_pci_hot_add_nic(Monitor *mon,
         return NULL;
     }
 
-    opts = qemu_opts_parse(&qemu_net_opts, opts_str ? opts_str : "", 0);
+    opts = qemu_opts_parse(qemu_find_opts("net"), opts_str ? opts_str : "", 0);
     if (!opts) {
-        monitor_printf(mon, "parsing network options '%s' failed\n",
-                       opts_str ? opts_str : "");
         return NULL;
     }
 
@@ -94,7 +90,11 @@ static int scsi_hot_add(Monitor *mon, DeviceState *adapter,
      * specified).
      */
     dinfo->unit = qemu_opt_get_number(dinfo->opts, "unit", -1);
-    scsidev = scsi_bus_legacy_add_drive(scsibus, dinfo, dinfo->unit);
+    dinfo->bus = scsibus->busnr;
+    scsidev = scsi_bus_legacy_add_drive(scsibus, dinfo->bdrv, dinfo->unit, false);
+    if (!scsidev) {
+        return -1;
+    }
     dinfo->unit = scsidev->id;
 
     if (printinfo)
@@ -107,7 +107,7 @@ void drive_hot_add(Monitor *mon, const QDict *qdict)
 {
     int dom, pci_bus;
     unsigned slot;
-    int type, bus;
+    int type;
     PCIDevice *dev;
     DriveInfo *dinfo = NULL;
     const char *pci_addr = qdict_get_str(qdict, "pci_addr");
@@ -121,14 +121,14 @@ void drive_hot_add(Monitor *mon, const QDict *qdict)
         goto err;
     }
     type = dinfo->type;
-    bus = drive_get_max_bus (type);
 
     switch (type) {
     case IF_SCSI:
         if (pci_read_devaddr(mon, pci_addr, &dom, &pci_bus, &slot)) {
             goto err;
         }
-        dev = pci_find_device(pci_find_root_bus(0), pci_bus, slot, 0);
+        dev = pci_find_device(pci_find_root_bus(dom), pci_bus,
+                              PCI_DEVFN(slot, 0));
         if (!dev) {
             monitor_printf(mon, "no pci device with address %s\n", pci_addr);
             goto err;
@@ -148,7 +148,7 @@ void drive_hot_add(Monitor *mon, const QDict *qdict)
 
 err:
     if (dinfo)
-        drive_uninit(dinfo);
+        drive_put_ref(dinfo);
     return;
 }
 
@@ -217,7 +217,11 @@ static PCIDevice *qemu_pci_hot_add_storage(Monitor *mon,
             return NULL;
         }
         dev = pci_create(bus, devfn, "virtio-blk-pci");
-        qdev_prop_set_drive(&dev->qdev, "drive", dinfo);
+        if (qdev_prop_set_drive(&dev->qdev, "drive", dinfo->bdrv) < 0) {
+            qdev_free(&dev->qdev);
+            dev = NULL;
+            break;
+        }
         if (qdev_init(&dev->qdev) < 0)
             dev = NULL;
         break;
@@ -227,36 +231,7 @@ static PCIDevice *qemu_pci_hot_add_storage(Monitor *mon,
     return dev;
 }
 
-void pci_device_hot_add_print(Monitor *mon, const QObject *data)
-{
-    QDict *qdict;
-
-    assert(qobject_type(data) == QTYPE_QDICT);
-    qdict = qobject_to_qdict(data);
-
-    monitor_printf(mon, "OK domain %d, bus %d, slot %d, function %d\n",
-                   (int) qdict_get_int(qdict, "domain"),
-                   (int) qdict_get_int(qdict, "bus"),
-                   (int) qdict_get_int(qdict, "slot"),
-                   (int) qdict_get_int(qdict, "function"));
-
-}
-
-/**
- * pci_device_hot_add(): Hot add a PCI device
- *
- * Return a QDict with the following device information:
- *
- * - "domain": domain number
- * - "bus": bus number
- * - "slot": slot number
- * - "function": function number
- *
- * Example:
- *
- * { "domain": 0, "bus": 0, "slot": 5, "function": 0 }
- */
-int pci_device_hot_add(Monitor *mon, const QDict *qdict, QObject **ret_data)
+void pci_device_hot_add(Monitor *mon, const QDict *qdict)
 {
     PCIDevice *dev = NULL;
     const char *pci_addr = qdict_get_str(qdict, "pci_addr");
@@ -281,24 +256,19 @@ int pci_device_hot_add(Monitor *mon, const QDict *qdict, QObject **ret_data)
         dev = qemu_pci_hot_add_storage(mon, pci_addr, opts);
     } else {
         monitor_printf(mon, "invalid type: %s\n", type);
-        return -1;
     }
 
     if (dev) {
-        *ret_data =
-        qobject_from_jsonf("{ 'domain': 0, 'bus': %d, 'slot': %d, "
-                           "'function': %d }", pci_bus_num(dev->bus),
-                           PCI_SLOT(dev->devfn), PCI_FUNC(dev->devfn));
-    } else {
+        monitor_printf(mon, "OK domain %d, bus %d, slot %d, function %d\n",
+                       pci_find_domain(dev->bus),
+                       pci_bus_num(dev->bus), PCI_SLOT(dev->devfn),
+                       PCI_FUNC(dev->devfn));
+    } else
         monitor_printf(mon, "failed to add %s\n", opts);
-        return -1;
-    }
-
-    return 0;
 }
 #endif
 
-int pci_device_hot_remove(Monitor *mon, const char *pci_addr)
+static int pci_device_hot_remove(Monitor *mon, const char *pci_addr)
 {
     PCIDevice *d;
     int dom, bus;
@@ -308,7 +278,7 @@ int pci_device_hot_remove(Monitor *mon, const char *pci_addr)
         return -1;
     }
 
-    d = pci_find_device(pci_find_root_bus(0), bus, slot, 0);
+    d = pci_find_device(pci_find_root_bus(dom), bus, PCI_DEVFN(slot, 0));
     if (!d) {
         monitor_printf(mon, "slot %d empty\n", slot);
         return -1;
@@ -316,8 +286,7 @@ int pci_device_hot_remove(Monitor *mon, const char *pci_addr)
     return qdev_unplug(&d->qdev);
 }
 
-int do_pci_device_hot_remove(Monitor *mon, const QDict *qdict,
-                             QObject **ret_data)
+void do_pci_device_hot_remove(Monitor *mon, const QDict *qdict)
 {
-    return pci_device_hot_remove(mon, qdict_get_str(qdict, "pci_addr"));
+    pci_device_hot_remove(mon, qdict_get_str(qdict, "pci_addr"));
 }

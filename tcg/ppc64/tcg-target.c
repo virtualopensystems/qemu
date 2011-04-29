@@ -435,7 +435,7 @@ static const uint32_t tcg_to_bc[10] = {
     [TCG_COND_GTU] = BC | BI (7, CR_GT) | BO_COND_TRUE,
 };
 
-static void tcg_out_mov (TCGContext *s, int ret, int arg)
+static void tcg_out_mov (TCGContext *s, TCGType type, int ret, int arg)
 {
     tcg_out32 (s, OR | SAB (arg, ret, arg));
 }
@@ -644,7 +644,7 @@ static void tcg_out_qemu_ld (TCGContext *s, const TCGArg *args, int opc)
 #endif
 
     /* slow path */
-    tcg_out_mov (s, 3, addr_reg);
+    tcg_out_mov (s, TCG_TYPE_I64, 3, addr_reg);
     tcg_out_movi (s, TCG_TYPE_I64, 4, mem_index);
 
     tcg_out_call (s, (tcg_target_long) qemu_ld_helpers[s_bits], 1);
@@ -664,7 +664,7 @@ static void tcg_out_qemu_ld (TCGContext *s, const TCGArg *args, int opc)
     case 2:
     case 3:
         if (data_reg != 3)
-            tcg_out_mov (s, data_reg, 3);
+            tcg_out_mov (s, TCG_TYPE_I64, data_reg, 3);
         break;
     }
     label2_ptr = s->code_ptr;
@@ -790,7 +790,7 @@ static void tcg_out_qemu_st (TCGContext *s, const TCGArg *args, int opc)
 #endif
 
     /* slow path */
-    tcg_out_mov (s, 3, addr_reg);
+    tcg_out_mov (s, TCG_TYPE_I64, 3, addr_reg);
     tcg_out_rld (s, RLDICL, 4, data_reg, 0, 64 - (1 << (3 + opc)));
     tcg_out_movi (s, TCG_TYPE_I64, 5, mem_index);
 
@@ -860,7 +860,7 @@ static void tcg_out_qemu_st (TCGContext *s, const TCGArg *args, int opc)
 #endif
 }
 
-void tcg_target_qemu_prologue (TCGContext *s)
+static void tcg_target_qemu_prologue (TCGContext *s)
 {
     int i, frame_size;
 #ifndef __APPLE__
@@ -899,7 +899,10 @@ void tcg_target_qemu_prologue (TCGContext *s)
     tcg_out32 (s, STD | RS (0) | RA (1) | (frame_size + 16));
 
 #ifdef CONFIG_USE_GUEST_BASE
-    tcg_out_movi (s, TCG_TYPE_I64, TCG_GUEST_BASE_REG, GUEST_BASE);
+    if (GUEST_BASE) {
+        tcg_out_movi (s, TCG_TYPE_I64, TCG_GUEST_BASE_REG, GUEST_BASE);
+        tcg_regset_set_reg(s->reserved_regs, TCG_GUEST_BASE_REG);
+    }
 #endif
 
     tcg_out32 (s, MTSPR | RS (3) | CTR);
@@ -1663,7 +1666,7 @@ static const TCGTargetOpDef ppc_op_defs[] = {
     { -1 },
 };
 
-void tcg_target_init (TCGContext *s)
+static void tcg_target_init (TCGContext *s)
 {
     tcg_regset_set32 (tcg_target_available_regs[TCG_TYPE_I32], 0, 0xffffffff);
     tcg_regset_set32 (tcg_target_available_regs[TCG_TYPE_I64], 0, 0xffffffff);
@@ -1691,10 +1694,6 @@ void tcg_target_init (TCGContext *s)
     tcg_regset_set_reg (s->reserved_regs, TCG_REG_R2);
 #endif
     tcg_regset_set_reg (s->reserved_regs, TCG_REG_R13);
-
-#ifdef CONFIG_USE_GUEST_BASE
-    tcg_regset_set_reg(s->reserved_regs, TCG_GUEST_BASE_REG);
-#endif
 
     tcg_add_target_add_op_defs (ppc_op_defs);
 }

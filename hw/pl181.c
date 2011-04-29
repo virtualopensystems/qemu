@@ -7,9 +7,9 @@
  * This code is licenced under the GPL.
  */
 
+#include "blockdev.h"
 #include "sysbus.h"
 #include "sd.h"
-#include "sysemu.h"
 
 //#define DEBUG_PL181 1
 
@@ -47,6 +47,8 @@ typedef struct {
     int linux_hack;
     uint32_t fifo[PL181_FIFO_LEN];
     qemu_irq irq[2];
+    /* GPIO outputs for 'card is readonly' and 'card inserted' */
+    qemu_irq cardstatus[2];
 } pl181_state;
 
 #define PL181_CMD_INDEX     0x3f
@@ -444,21 +446,25 @@ static void pl181_reset(void *opaque)
     s->linux_hack = 0;
     s->mask[0] = 0;
     s->mask[1] = 0;
+
+    /* We can assume our GPIO outputs have been wired up now */
+    sd_set_cb(s->card, s->cardstatus[0], s->cardstatus[1]);
 }
 
 static int pl181_init(SysBusDevice *dev)
 {
     int iomemtype;
     pl181_state *s = FROM_SYSBUS(pl181_state, dev);
-    BlockDriverState *bd;
+    DriveInfo *dinfo;
 
-    iomemtype = cpu_register_io_memory(pl181_readfn,
-                                       pl181_writefn, s);
+    iomemtype = cpu_register_io_memory(pl181_readfn, pl181_writefn, s,
+                                       DEVICE_NATIVE_ENDIAN);
     sysbus_init_mmio(dev, 0x1000, iomemtype);
     sysbus_init_irq(dev, &s->irq[0]);
     sysbus_init_irq(dev, &s->irq[1]);
-    bd = qdev_init_bdrv(&dev->qdev, IF_SD);
-    s->card = sd_init(bd, 0);
+    qdev_init_gpio_out(&s->busdev.qdev, s->cardstatus, 2);
+    dinfo = drive_get_next(IF_SD);
+    s->card = sd_init(dinfo ? dinfo->bdrv : NULL, 0);
     qemu_register_reset(pl181_reset, s);
     pl181_reset(s);
     /* ??? Save/restore.  */

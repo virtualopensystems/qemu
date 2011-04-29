@@ -23,8 +23,7 @@
 #include "tcg-op.h"
 #include "qemu-log.h"
 
-void cpu_dump_state(CPUState *env, FILE *f,
-                    int (*cpu_fprintf)(FILE *f, const char *fmt, ...),
+void cpu_dump_state(CPUState *env, FILE *f, fprintf_function cpu_fprintf,
                     int flags)
 {
     int i;
@@ -37,7 +36,7 @@ void cpu_dump_state(CPUState *env, FILE *f,
         }
     }
     for (i = 0; i < 16; i++) {
-        cpu_fprintf(f, "F%02d=%016lx", i, env->fregs[i]);
+        cpu_fprintf(f, "F%02d=%016" PRIx64, i, *(uint64_t *)&env->fregs[i]);
         if ((i % 4) == 3) {
             cpu_fprintf(f, "\n");
         } else {
@@ -55,8 +54,7 @@ void gen_intermediate_code_pc (CPUState *env, struct TranslationBlock *tb)
 {
 }
 
-void gen_pc_load(CPUState *env, TranslationBlock *tb,
-                unsigned long searched_pc, int pc_pos, void *puc)
+void restore_state_to_opc(CPUState *env, TranslationBlock *tb, int pc_pos)
 {
     env->psw.addr = gen_opc_pc[pc_pos];
 }

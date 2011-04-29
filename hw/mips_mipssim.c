@@ -106,7 +106,10 @@ static void main_cpu_reset(void *opaque)
     CPUState *env = s->env;
 
     cpu_reset(env);
-    env->active_tc.PC = s->vector;
+    env->active_tc.PC = s->vector & ~(target_ulong)1;
+    if (s->vector & 1) {
+        env->hflags |= MIPS_HFLAG_M16;
+    }
 }
 
 static void
@@ -141,8 +144,8 @@ mips_mipssim_init (ram_addr_t ram_size,
     qemu_register_reset(main_cpu_reset, reset_info);
 
     /* Allocate RAM. */
-    ram_offset = qemu_ram_alloc(ram_size);
-    bios_offset = qemu_ram_alloc(BIOS_SIZE);
+    ram_offset = qemu_ram_alloc(NULL, "mips_mipssim.ram", ram_size);
+    bios_offset = qemu_ram_alloc(NULL, "mips_mipssim.bios", BIOS_SIZE);
 
     cpu_register_physical_memory(0, ram_size, ram_offset | IO_MEM_RAM);
 
@@ -183,11 +186,7 @@ mips_mipssim_init (ram_addr_t ram_size,
     cpu_mips_clock_init(env);
 
     /* Register 64 KB of ISA IO space at 0x1fd00000. */
-#ifdef TARGET_WORDS_BIGENDIAN
-    isa_mmio_init(0x1fd00000, 0x00010000, 1);
-#else
-    isa_mmio_init(0x1fd00000, 0x00010000, 0);
-#endif
+    isa_mmio_init(0x1fd00000, 0x00010000);
 
     /* A single 16450 sits at offset 0x3f8. It is attached to
        MIPS CPU INT2, which is interrupt 4. */

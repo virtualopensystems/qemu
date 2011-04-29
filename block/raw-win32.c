@@ -147,10 +147,17 @@ static int raw_write(BlockDriverState *bs, int64_t sector_num,
     return ret_count;
 }
 
-static void raw_flush(BlockDriverState *bs)
+static int raw_flush(BlockDriverState *bs)
 {
     BDRVRawState *s = bs->opaque;
-    FlushFileBuffers(s->hfile);
+    int ret;
+
+    ret = FlushFileBuffers(s->hfile);
+    if (ret == 0) {
+        return -EIO;
+    }
+
+    return 0;
 }
 
 static void raw_close(BlockDriverState *bs)
@@ -238,10 +245,11 @@ static QEMUOptionParameter raw_create_options[] = {
     { NULL }
 };
 
-static BlockDriver bdrv_raw = {
-    .format_name	= "raw",
+static BlockDriver bdrv_file = {
+    .format_name	= "file",
+    .protocol_name	= "file",
     .instance_size	= sizeof(BDRVRawState),
-    .bdrv_open		= raw_open,
+    .bdrv_file_open	= raw_open,
     .bdrv_close		= raw_close,
     .bdrv_create	= raw_create,
     .bdrv_flush		= raw_flush,
@@ -393,23 +401,30 @@ static int raw_set_locked(BlockDriverState *bs, int locked)
 }
 #endif
 
+static int hdev_has_zero_init(BlockDriverState *bs)
+{
+    return 0;
+}
+
 static BlockDriver bdrv_host_device = {
     .format_name	= "host_device",
+    .protocol_name	= "host_device",
     .instance_size	= sizeof(BDRVRawState),
     .bdrv_probe_device	= hdev_probe_device,
-    .bdrv_open		= hdev_open,
+    .bdrv_file_open	= hdev_open,
     .bdrv_close		= raw_close,
     .bdrv_flush		= raw_flush,
+    .bdrv_has_zero_init = hdev_has_zero_init,
 
     .bdrv_read		= raw_read,
     .bdrv_write	        = raw_write,
     .bdrv_getlength	= raw_getlength,
 };
 
-static void bdrv_raw_init(void)
+static void bdrv_file_init(void)
 {
-    bdrv_register(&bdrv_raw);
+    bdrv_register(&bdrv_file);
     bdrv_register(&bdrv_host_device);
 }
 
-block_init(bdrv_raw_init);
+block_init(bdrv_file_init);

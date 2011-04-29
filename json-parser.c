@@ -11,7 +11,6 @@
  *
  */
 
-#include <stdbool.h>
 #include <stdarg.h>
 
 #include "qemu-common.h"
@@ -92,7 +91,8 @@ static int token_is_escape(QObject *obj, const char *value)
 /**
  * Error handler
  */
-static void parse_error(JSONParserContext *ctxt, QObject *token, const char *msg, ...)
+static void GCC_FMT_ATTR(3, 4) parse_error(JSONParserContext *ctxt,
+                                           QObject *token, const char *msg, ...)
 {
     va_list ap;
     va_start(ap, msg);
@@ -204,6 +204,10 @@ static QString *qstring_from_escaped_str(JSONParserContext *ctxt, QObject *token
                 break;
             case 'b':
                 qstring_append(str, "\b");
+                ptr++;
+                break;
+            case 'f':
+                qstring_append(str, "\f");
                 ptr++;
                 break;
             case 'n':

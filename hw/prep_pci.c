@@ -125,7 +125,8 @@ PCIBus *pci_prep_init(qemu_irq *pic)
     pci_host_data_register_ioport(0xcfc, s);
 
     PPC_io_memory = cpu_register_io_memory(PPC_PCIIO_read,
-                                           PPC_PCIIO_write, s);
+                                           PPC_PCIIO_write, s,
+                                           DEVICE_NATIVE_ENDIAN);
     cpu_register_physical_memory(0x80800000, 0x00400000, PPC_io_memory);
 
     /* PCI host bridge */
@@ -137,7 +138,6 @@ PCIBus *pci_prep_init(qemu_irq *pic)
     pci_config_set_class(d->config, PCI_CLASS_BRIDGE_HOST);
     d->config[0x0C] = 0x08; // cache_line_size
     d->config[0x0D] = 0x10; // latency_timer
-    d->config[PCI_HEADER_TYPE] = PCI_HEADER_TYPE_NORMAL; // header_type
     d->config[0x34] = 0x00; // capabilities_pointer
 
     return s->bus;

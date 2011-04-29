@@ -1,7 +1,7 @@
-#include "sysemu.h"
 #include "net.h"
 #include "qdev.h"
 #include "qerror.h"
+#include "blockdev.h"
 
 void *qdev_get_prop_ptr(DeviceState *dev, Property *prop)
 {
@@ -51,7 +51,7 @@ static int parse_bit(DeviceState *dev, Property *prop, const char *str)
 
 static int print_bit(DeviceState *dev, Property *prop, char *dest, size_t len)
 {
-    uint8_t *p = qdev_get_prop_ptr(dev, prop);
+    uint32_t *p = qdev_get_prop_ptr(dev, prop);
     return snprintf(dest, len, (*p & qdev_get_prop_mask(prop)) ? "on" : "off");
 }
 
@@ -68,12 +68,14 @@ PropertyInfo qdev_prop_bit = {
 static int parse_uint8(DeviceState *dev, Property *prop, const char *str)
 {
     uint8_t *ptr = qdev_get_prop_ptr(dev, prop);
-    const char *fmt;
+    char *end;
 
     /* accept both hex and decimal */
-    fmt = strncasecmp(str, "0x",2) == 0 ? "%" PRIx8 : "%" PRIu8;
-    if (sscanf(str, fmt, ptr) != 1)
+    *ptr = strtoul(str, &end, 0);
+    if ((*end != '\0') || (end == str)) {
         return -EINVAL;
+    }
+
     return 0;
 }
 
@@ -96,12 +98,14 @@ PropertyInfo qdev_prop_uint8 = {
 static int parse_uint16(DeviceState *dev, Property *prop, const char *str)
 {
     uint16_t *ptr = qdev_get_prop_ptr(dev, prop);
-    const char *fmt;
+    char *end;
 
     /* accept both hex and decimal */
-    fmt = strncasecmp(str, "0x",2) == 0 ? "%" PRIx16 : "%" PRIu16;
-    if (sscanf(str, fmt, ptr) != 1)
+    *ptr = strtoul(str, &end, 0);
+    if ((*end != '\0') || (end == str)) {
         return -EINVAL;
+    }
+
     return 0;
 }
 
@@ -124,12 +128,14 @@ PropertyInfo qdev_prop_uint16 = {
 static int parse_uint32(DeviceState *dev, Property *prop, const char *str)
 {
     uint32_t *ptr = qdev_get_prop_ptr(dev, prop);
-    const char *fmt;
+    char *end;
 
     /* accept both hex and decimal */
-    fmt = strncasecmp(str, "0x",2) == 0 ? "%" PRIx32 : "%" PRIu32;
-    if (sscanf(str, fmt, ptr) != 1)
+    *ptr = strtoul(str, &end, 0);
+    if ((*end != '\0') || (end == str)) {
         return -EINVAL;
+    }
+
     return 0;
 }
 
@@ -150,9 +156,13 @@ PropertyInfo qdev_prop_uint32 = {
 static int parse_int32(DeviceState *dev, Property *prop, const char *str)
 {
     int32_t *ptr = qdev_get_prop_ptr(dev, prop);
+    char *end;
 
-    if (sscanf(str, "%" PRId32, ptr) != 1)
+    *ptr = strtol(str, &end, 10);
+    if ((*end != '\0') || (end == str)) {
         return -EINVAL;
+    }
+
     return 0;
 }
 
@@ -175,9 +185,13 @@ PropertyInfo qdev_prop_int32 = {
 static int parse_hex32(DeviceState *dev, Property *prop, const char *str)
 {
     uint32_t *ptr = qdev_get_prop_ptr(dev, prop);
+    char *end;
 
-    if (sscanf(str, "%" PRIx32, ptr) != 1)
+    *ptr = strtoul(str, &end, 16);
+    if ((*end != '\0') || (end == str)) {
         return -EINVAL;
+    }
+
     return 0;
 }
 
@@ -200,12 +214,14 @@ PropertyInfo qdev_prop_hex32 = {
 static int parse_uint64(DeviceState *dev, Property *prop, const char *str)
 {
     uint64_t *ptr = qdev_get_prop_ptr(dev, prop);
-    const char *fmt;
+    char *end;
 
     /* accept both hex and decimal */
-    fmt = strncasecmp(str, "0x",2) == 0 ? "%" PRIx64 : "%" PRIu64;
-    if (sscanf(str, fmt, ptr) != 1)
+    *ptr = strtoull(str, &end, 0);
+    if ((*end != '\0') || (end == str)) {
         return -EINVAL;
+    }
+
     return 0;
 }
 
@@ -228,9 +244,13 @@ PropertyInfo qdev_prop_uint64 = {
 static int parse_hex64(DeviceState *dev, Property *prop, const char *str)
 {
     uint64_t *ptr = qdev_get_prop_ptr(dev, prop);
+    char *end;
 
-    if (sscanf(str, "%" PRIx64, ptr) != 1)
+    *ptr = strtoull(str, &end, 16);
+    if ((*end != '\0') || (end == str)) {
         return -EINVAL;
+    }
+
     return 0;
 }
 
@@ -260,6 +280,11 @@ static int parse_string(DeviceState *dev, Property *prop, const char *str)
     return 0;
 }
 
+static void free_string(DeviceState *dev, Property *prop)
+{
+    qemu_free(*(char **)qdev_get_prop_ptr(dev, prop));
+}
+
 static int print_string(DeviceState *dev, Property *prop, char *dest, size_t len)
 {
     char **ptr = qdev_get_prop_ptr(dev, prop);
@@ -274,32 +299,49 @@ PropertyInfo qdev_prop_string = {
     .size  = sizeof(char*),
     .parse = parse_string,
     .print = print_string,
+    .free  = free_string,
 };
 
 /* --- drive --- */
 
 static int parse_drive(DeviceState *dev, Property *prop, const char *str)
 {
-    DriveInfo **ptr = qdev_get_prop_ptr(dev, prop);
+    BlockDriverState **ptr = qdev_get_prop_ptr(dev, prop);
+    BlockDriverState *bs;
 
-    *ptr = drive_get_by_id(str);
-    if (*ptr == NULL)
+    bs = bdrv_find(str);
+    if (bs == NULL)
         return -ENOENT;
+    if (bdrv_attach(bs, dev) < 0)
+        return -EEXIST;
+    *ptr = bs;
     return 0;
+}
+
+static void free_drive(DeviceState *dev, Property *prop)
+{
+    BlockDriverState **ptr = qdev_get_prop_ptr(dev, prop);
+
+    if (*ptr) {
+        bdrv_detach(*ptr, dev);
+        blockdev_auto_del(*ptr);
+    }
 }
 
 static int print_drive(DeviceState *dev, Property *prop, char *dest, size_t len)
 {
-    DriveInfo **ptr = qdev_get_prop_ptr(dev, prop);
-    return snprintf(dest, len, "%s", (*ptr) ? (*ptr)->id : "<null>");
+    BlockDriverState **ptr = qdev_get_prop_ptr(dev, prop);
+    return snprintf(dest, len, "%s",
+                    *ptr ? bdrv_get_device_name(*ptr) : "<null>");
 }
 
 PropertyInfo qdev_prop_drive = {
     .name  = "drive",
     .type  = PROP_TYPE_DRIVE,
-    .size  = sizeof(DriveInfo*),
+    .size  = sizeof(BlockDriverState *),
     .parse = parse_drive,
     .print = print_drive,
+    .free  = free_drive,
 };
 
 /* --- character device --- */
@@ -309,8 +351,13 @@ static int parse_chr(DeviceState *dev, Property *prop, const char *str)
     CharDriverState **ptr = qdev_get_prop_ptr(dev, prop);
 
     *ptr = qemu_chr_find(str);
-    if (*ptr == NULL)
+    if (*ptr == NULL) {
         return -ENOENT;
+    }
+    if ((*ptr)->avail_connections < 1) {
+        return -EEXIST;
+    }
+    --(*ptr)->avail_connections;
     return 0;
 }
 
@@ -592,6 +639,11 @@ void qdev_prop_set(DeviceState *dev, const char *name, void *src, enum PropertyT
     qdev_prop_cpy(dev, prop, src);
 }
 
+void qdev_prop_set_bit(DeviceState *dev, const char *name, bool value)
+{
+    qdev_prop_set(dev, name, &value, PROP_TYPE_BIT);
+}
+
 void qdev_prop_set_uint8(DeviceState *dev, const char *name, uint8_t value)
 {
     qdev_prop_set(dev, name, &value, PROP_TYPE_UINT8);
@@ -617,11 +669,33 @@ void qdev_prop_set_uint64(DeviceState *dev, const char *name, uint64_t value)
     qdev_prop_set(dev, name, &value, PROP_TYPE_UINT64);
 }
 
-void qdev_prop_set_drive(DeviceState *dev, const char *name, DriveInfo *value)
+void qdev_prop_set_string(DeviceState *dev, const char *name, char *value)
 {
-    qdev_prop_set(dev, name, &value, PROP_TYPE_DRIVE);
+    qdev_prop_set(dev, name, &value, PROP_TYPE_STRING);
 }
 
+int qdev_prop_set_drive(DeviceState *dev, const char *name, BlockDriverState *value)
+{
+    int res;
+
+    res = bdrv_attach(value, dev);
+    if (res < 0) {
+        error_report("Can't attach drive %s to %s.%s: %s",
+                     bdrv_get_device_name(value),
+                     dev->id ? dev->id : dev->info->name,
+                     name, strerror(-res));
+        return -1;
+    }
+    qdev_prop_set(dev, name, &value, PROP_TYPE_DRIVE);
+    return 0;
+}
+
+void qdev_prop_set_drive_nofail(DeviceState *dev, const char *name, BlockDriverState *value)
+{
+    if (qdev_prop_set_drive(dev, name, value) < 0) {
+        exit(1);
+    }
+}
 void qdev_prop_set_chr(DeviceState *dev, const char *name, CharDriverState *value)
 {
     qdev_prop_set(dev, name, &value, PROP_TYPE_CHR);
@@ -661,7 +735,7 @@ void qdev_prop_set_defaults(DeviceState *dev, Property *props)
 
 static QTAILQ_HEAD(, GlobalProperty) global_props = QTAILQ_HEAD_INITIALIZER(global_props);
 
-void qdev_prop_register_global(GlobalProperty *prop)
+static void qdev_prop_register_global(GlobalProperty *prop)
 {
     QTAILQ_INSERT_TAIL(&global_props, prop, next);
 }
@@ -688,4 +762,21 @@ void qdev_prop_set_globals(DeviceState *dev)
             exit(1);
         }
     }
+}
+
+static int qdev_add_one_global(QemuOpts *opts, void *opaque)
+{
+    GlobalProperty *g;
+
+    g = qemu_mallocz(sizeof(*g));
+    g->driver   = qemu_opt_get(opts, "driver");
+    g->property = qemu_opt_get(opts, "property");
+    g->value    = qemu_opt_get(opts, "value");
+    qdev_prop_register_global(g);
+    return 0;
+}
+
+void qemu_add_globals(void)
+{
+    qemu_opts_foreach(qemu_find_opts("global"), qdev_add_one_global, NULL, 0);
 }

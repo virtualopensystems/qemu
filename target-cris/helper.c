@@ -78,7 +78,7 @@ int cpu_cris_handle_mmu_fault (CPUState *env, target_ulong address, int rw,
 
 	D(printf ("%s addr=%x pc=%x rw=%x\n", __func__, address, env->pc, rw));
 	miss = cris_mmu_translate(&res, env, address & TARGET_PAGE_MASK,
-				  rw, mmu_idx);
+				  rw, mmu_idx, 0);
 	if (miss)
 	{
 		if (env->exception_index == EXCP_BUSFAULT)
@@ -101,7 +101,7 @@ int cpu_cris_handle_mmu_fault (CPUState *env, target_ulong address, int rw,
 		phy = res.phy & ~0x80000000;
 		prot = res.prot;
 		tlb_set_page(env, address & TARGET_PAGE_MASK, phy,
-                             prot | PAGE_EXEC, mmu_idx, TARGET_PAGE_SIZE);
+                             prot, mmu_idx, TARGET_PAGE_SIZE);
                 r = 0;
 	}
 	if (r > 0)
@@ -235,8 +235,14 @@ void do_interrupt(CPUState *env)
 	/* Apply the CRIS CCS shift. Clears U if set.  */
 	cris_shift_ccs(env);
 
-	/* Now that we are in kernel mode, load the handlers address.  */
+	/* Now that we are in kernel mode, load the handlers address.
+	   This load may not fault, real hw leaves that behaviour as
+	   undefined.  */
 	env->pc = ldl_code(env->pregs[PR_EBP] + ex_vec * 4);
+
+	/* Clear the excption_index to avoid spurios hw_aborts for recursive
+	   bus faults.  */
+	env->exception_index = -1;
 
 	D_LOG("%s isr=%x vec=%x ccs=%x pid=%d erp=%x\n",
 		   __func__, env->pc, ex_vec,
@@ -250,7 +256,13 @@ target_phys_addr_t cpu_get_phys_page_debug(CPUState * env, target_ulong addr)
 	uint32_t phy = addr;
 	struct cris_mmu_result res;
 	int miss;
-	miss = cris_mmu_translate(&res, env, addr, 0, 0);
+
+	miss = cris_mmu_translate(&res, env, addr, 0, 0, 1);
+	/* If D TLB misses, try I TLB.  */
+	if (miss) {
+		miss = cris_mmu_translate(&res, env, addr, 2, 0, 1);
+	}
+
 	if (!miss)
 		phy = res.phy;
 	D(fprintf(stderr, "%s %x -> %x\n", __func__, addr, phy));

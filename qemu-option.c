@@ -30,6 +30,7 @@
 #include "qemu-error.h"
 #include "qemu-objects.h"
 #include "qemu-option.h"
+#include "qerror.h"
 
 /*
  * Extracts the name of an option from the parameter string (p points at the
@@ -175,7 +176,7 @@ static int parse_option_bool(const char *name, const char *value, int *ret)
         } else if (!strcmp(value, "off")) {
             *ret = 0;
         } else {
-            fprintf(stderr, "Option '%s': Use 'on' or 'off'\n", name);
+            qerror_report(QERR_INVALID_PARAMETER_VALUE, name, "'on' or 'off'");
             return -1;
         }
     } else {
@@ -192,12 +193,12 @@ static int parse_option_number(const char *name, const char *value, uint64_t *re
     if (value != NULL) {
         number = strtoull(value, &postfix, 0);
         if (*postfix != '\0') {
-            fprintf(stderr, "Option '%s' needs a number as parameter\n", name);
+            qerror_report(QERR_INVALID_PARAMETER_VALUE, name, "a number");
             return -1;
         }
         *ret = number;
     } else {
-        fprintf(stderr, "Option '%s' needs a parameter\n", name);
+        qerror_report(QERR_INVALID_PARAMETER_VALUE, name, "a number");
         return -1;
     }
     return 0;
@@ -225,13 +226,13 @@ static int parse_option_size(const char *name, const char *value, uint64_t *ret)
             *ret = (uint64_t) sizef;
             break;
         default:
-            fprintf(stderr, "Option '%s' needs size as parameter\n", name);
-            fprintf(stderr, "You may use k, M, G or T suffixes for "
+            qerror_report(QERR_INVALID_PARAMETER_VALUE, name, "a size");
+            error_printf_unless_qmp("You may use k, M, G or T suffixes for "
                     "kilobytes, megabytes, gigabytes and terabytes.\n");
             return -1;
         }
     } else {
-        fprintf(stderr, "Option '%s' needs a parameter\n", name);
+        qerror_report(QERR_INVALID_PARAMETER_VALUE, name, "a size");
         return -1;
     }
     return 0;
@@ -345,10 +346,56 @@ void free_option_parameters(QEMUOptionParameter *list)
 }
 
 /*
+ * Count valid options in list
+ */
+static size_t count_option_parameters(QEMUOptionParameter *list)
+{
+    size_t num_options = 0;
+
+    while (list && list->name) {
+        num_options++;
+        list++;
+    }
+
+    return num_options;
+}
+
+/*
+ * Append an option list (list) to an option list (dest).
+ *
+ * If dest is NULL, a new copy of list is created.
+ *
+ * Returns a pointer to the first element of dest (or the newly allocated copy)
+ */
+QEMUOptionParameter *append_option_parameters(QEMUOptionParameter *dest,
+    QEMUOptionParameter *list)
+{
+    size_t num_options, num_dest_options;
+
+    num_options = count_option_parameters(dest);
+    num_dest_options = num_options;
+
+    num_options += count_option_parameters(list);
+
+    dest = qemu_realloc(dest, (num_options + 1) * sizeof(QEMUOptionParameter));
+    dest[num_dest_options].name = NULL;
+
+    while (list && list->name) {
+        if (get_option_parameter(dest, list->name) == NULL) {
+            dest[num_dest_options++] = *list;
+            dest[num_dest_options].name = NULL;
+        }
+        list++;
+    }
+
+    return dest;
+}
+
+/*
  * Parses a parameter string (param) into an option list (dest).
  *
- * list is the templace is. If dest is NULL, a new copy of list is created for
- * it. If list is NULL, this function fails.
+ * list is the template option list. If dest is NULL, a new copy of list is
+ * created. If list is NULL, this function fails.
  *
  * A parameter string consists of one or more parameters, separated by commas.
  * Each parameter consists of its name and possibly of a value. In the latter
@@ -364,31 +411,18 @@ void free_option_parameters(QEMUOptionParameter *list)
 QEMUOptionParameter *parse_option_parameters(const char *param,
     QEMUOptionParameter *list, QEMUOptionParameter *dest)
 {
-    QEMUOptionParameter *cur;
     QEMUOptionParameter *allocated = NULL;
     char name[256];
     char value[256];
     char *param_delim, *value_delim;
     char next_delim;
-    size_t num_options;
 
     if (list == NULL) {
         return NULL;
     }
 
     if (dest == NULL) {
-        // Count valid options
-        num_options = 0;
-        cur = list;
-        while (cur->name) {
-            num_options++;
-            cur++;
-        }
-
-        // Create a copy of the option list to fill in values
-        dest = qemu_mallocz((num_options + 1) * sizeof(QEMUOptionParameter));
-        allocated = dest;
-        memcpy(dest, list, (num_options + 1) * sizeof(QEMUOptionParameter));
+        dest = allocated = append_option_parameters(NULL, list);
     }
 
     while (*param) {
@@ -580,8 +614,7 @@ int qemu_opt_set(QemuOpts *opts, const char *name, const char *value)
         if (i == 0) {
             /* empty list -> allow any */;
         } else {
-            fprintf(stderr, "option \"%s\" is not valid for %s\n",
-                    name, opts->list->name);
+            qerror_report(QERR_INVALID_PARAMETER, name);
             return -1;
         }
     }
@@ -597,8 +630,6 @@ int qemu_opt_set(QemuOpts *opts, const char *name, const char *value)
         opt->str = qemu_strdup(value);
     }
     if (qemu_opt_parse(opt) < 0) {
-        fprintf(stderr, "Failed to parse \"%s\" for \"%s.%s\"\n", opt->str,
-                opts->list->name, opt->name);
         qemu_opt_del(opt);
         return -1;
     }
@@ -635,16 +666,35 @@ QemuOpts *qemu_opts_find(QemuOptsList *list, const char *id)
     return NULL;
 }
 
+static int id_wellformed(const char *id)
+{
+    int i;
+
+    if (!qemu_isalpha(id[0])) {
+        return 0;
+    }
+    for (i = 1; id[i]; i++) {
+        if (!qemu_isalnum(id[i]) && !strchr("-._", id[i])) {
+            return 0;
+        }
+    }
+    return 1;
+}
+
 QemuOpts *qemu_opts_create(QemuOptsList *list, const char *id, int fail_if_exists)
 {
     QemuOpts *opts = NULL;
 
     if (id) {
+        if (!id_wellformed(id)) {
+            qerror_report(QERR_INVALID_PARAMETER_VALUE, "id", "an identifier");
+            error_printf_unless_qmp("Identifiers consist of letters, digits, '-', '.', '_', starting with a letter.\n");
+            return NULL;
+        }
         opts = qemu_opts_find(list, id);
         if (opts != NULL) {
             if (fail_if_exists) {
-                fprintf(stderr, "tried to create id \"%s\" twice for \"%s\"\n",
-                        id, list->name);
+                qerror_report(QERR_DUPLICATE_ID, id, list->name);
                 return NULL;
             } else {
                 return opts;
@@ -660,6 +710,20 @@ QemuOpts *qemu_opts_create(QemuOptsList *list, const char *id, int fail_if_exist
     QTAILQ_INIT(&opts->head);
     QTAILQ_INSERT_TAIL(&list->head, opts, next);
     return opts;
+}
+
+void qemu_opts_reset(QemuOptsList *list)
+{
+    QemuOpts *opts, *next_opts;
+
+    QTAILQ_FOREACH_SAFE(opts, &list->head, next, next_opts) {
+        qemu_opts_del(opts);
+    }
+}
+
+void qemu_opts_loc_restore(QemuOpts *opts)
+{
+    loc_restore(&opts->loc);
 }
 
 int qemu_opts_set(QemuOptsList *list, const char *id,
@@ -766,10 +830,10 @@ QemuOpts *qemu_opts_parse(QemuOptsList *list, const char *params,
 
     if (strncmp(params, "id=", 3) == 0) {
         get_opt_value(value, sizeof(value), params+3);
-        id = qemu_strdup(value);
+        id = value;
     } else if ((p = strstr(params, ",id=")) != NULL) {
         get_opt_value(value, sizeof(value), p+4);
-        id = qemu_strdup(value);
+        id = value;
     }
     opts = qemu_opts_create(list, id, 1);
     if (opts == NULL)
@@ -880,8 +944,7 @@ int qemu_opts_validate(QemuOpts *opts, const QemuOptDesc *desc)
             }
         }
         if (desc[i].name == NULL) {
-            fprintf(stderr, "option \"%s\" is not valid for %s\n",
-                    opt->name, opts->list->name);
+            qerror_report(QERR_INVALID_PARAMETER, opt->name);
             return -1;
         }
 

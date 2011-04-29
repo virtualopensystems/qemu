@@ -37,18 +37,14 @@
 #include <util.h>
 #endif
 
-#if defined(__OpenBSD__)
-#include <util.h>
-#endif
-
 int tap_open(char *ifname, int ifname_size, int *vnet_hdr, int vnet_hdr_required)
 {
     int fd;
     char *dev;
     struct stat s;
 
-#if defined(__FreeBSD__) || defined(__FreeBSD_kernel__)
-    /* if no ifname is given, always start the search from tap0. */
+#if defined(__FreeBSD__) || defined(__FreeBSD_kernel__) || defined(__OpenBSD__)
+    /* if no ifname is given, always start the search from tap0/tun0. */
     int i;
     char dname[100];
 
@@ -56,7 +52,11 @@ int tap_open(char *ifname, int ifname_size, int *vnet_hdr, int vnet_hdr_required
         if (*ifname) {
             snprintf(dname, sizeof dname, "/dev/%s", ifname);
         } else {
+#if defined(__OpenBSD__)
+            snprintf(dname, sizeof dname, "/dev/tun%d", i);
+#else
             snprintf(dname, sizeof dname, "/dev/tap%d", i);
+#endif
         }
         TFR(fd = open(dname, O_RDWR));
         if (fd >= 0) {
@@ -114,6 +114,15 @@ int tap_probe_vnet_hdr(int fd)
 int tap_probe_has_ufo(int fd)
 {
     return 0;
+}
+
+int tap_probe_vnet_hdr_len(int fd, int len)
+{
+    return 0;
+}
+
+void tap_fd_set_vnet_hdr_len(int fd, int len)
+{
 }
 
 void tap_fd_set_offload(int fd, int csum, int tso4,

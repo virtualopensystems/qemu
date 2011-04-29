@@ -1,8 +1,8 @@
 #include <signal.h>
 #include "xen_backend.h"
 #include "xen_domainbuild.h"
-#include "sysemu.h"
 #include "qemu-timer.h"
+#include "qemu-log.h"
 
 #include <xenguest.h>
 
@@ -148,7 +148,7 @@ static void xen_domain_poll(void *opaque)
         goto quit;
     }
 
-    qemu_mod_timer(xen_poll, qemu_get_clock(rt_clock) + 1000);
+    qemu_mod_timer(xen_poll, qemu_get_clock_ms(rt_clock) + 1000);
     return;
 
 quit:
@@ -290,8 +290,8 @@ int xen_domain_build_pv(const char *kernel, const char *ramdisk,
         goto err;
     }
 
-    xen_poll = qemu_new_timer(rt_clock, xen_domain_poll, NULL);
-    qemu_mod_timer(xen_poll, qemu_get_clock(rt_clock) + 1000);
+    xen_poll = qemu_new_timer_ms(rt_clock, xen_domain_poll, NULL);
+    qemu_mod_timer(xen_poll, qemu_get_clock_ms(rt_clock) + 1000);
     return 0;
 
 err:

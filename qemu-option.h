@@ -70,6 +70,8 @@ int set_option_parameter(QEMUOptionParameter *list, const char *name,
     const char *value);
 int set_option_parameter_int(QEMUOptionParameter *list, const char *name,
     uint64_t value);
+QEMUOptionParameter *append_option_parameters(QEMUOptionParameter *dest,
+    QEMUOptionParameter *list);
 QEMUOptionParameter *parse_option_parameters(const char *param,
     QEMUOptionParameter *list, QEMUOptionParameter *dest);
 void free_option_parameters(QEMUOptionParameter *list);
@@ -113,6 +115,8 @@ int qemu_opt_foreach(QemuOpts *opts, qemu_opt_loopfunc func, void *opaque,
 
 QemuOpts *qemu_opts_find(QemuOptsList *list, const char *id);
 QemuOpts *qemu_opts_create(QemuOptsList *list, const char *id, int fail_if_exists);
+void qemu_opts_reset(QemuOptsList *list);
+void qemu_opts_loc_restore(QemuOpts *opts);
 int qemu_opts_set(QemuOptsList *list, const char *id,
                   const char *name, const char *value);
 const char *qemu_opts_id(QemuOpts *opts);

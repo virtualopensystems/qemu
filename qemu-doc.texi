@@ -162,6 +162,7 @@ TODO (no longer available)
 * pcsys_monitor::      QEMU Monitor
 * disk_images::        Disk Images
 * pcsys_network::      Network emulation
+* pcsys_other_devs::   Other Devices
 * direct_linux_boot::  Direct Linux Boot
 * pcsys_usb::          USB emulation
 * vnc_security::       VNC security
@@ -200,7 +201,9 @@ ENSONIQ AudioPCI ES1370 sound card
 @item
 Intel 82801AA AC97 Audio compatible sound card
 @item
-Adlib(OPL2) - Yamaha YM3812 compatible chip
+Intel HD Audio Controller and HDA codec
+@item
+Adlib (OPL2) - Yamaha YM3812 compatible chip
 @item
 Gravis Ultrasound GF1 sound card
 @item
@@ -220,7 +223,7 @@ VGA BIOS.
 
 QEMU uses YM3812 emulation by Tatsuyuki Satoh.
 
-QEMU uses GUS emulation(GUSEMU32 @url{http://www.deinmeister.de/gusemu/})
+QEMU uses GUS emulation (GUSEMU32 @url{http://www.deinmeister.de/gusemu/})
 by Tibor "TS" Schütz.
 
 Not that, by default, GUS shares IRQ(7) with parallel ports and so
@@ -404,6 +407,7 @@ snapshots.
 * host_drives::               Using host drives
 * disk_images_fat_images::    Virtual FAT disk images
 * disk_images_nbd::           NBD access
+* disk_images_sheepdog::      Sheepdog disk images
 @end menu
 
 @node disk_images_quickstart
@@ -620,6 +624,64 @@ qemu linux1.img -hdb nbd:unix:/tmp/my_socket
 qemu linux2.img -hdb nbd:unix:/tmp/my_socket
 @end example
 
+If the nbd-server uses named exports (since NBD 2.9.18), you must use the
+"exportname" option:
+@example
+qemu -cdrom nbd:localhost:exportname=debian-500-ppc-netinst
+qemu -cdrom nbd:localhost:exportname=openSUSE-11.1-ppc-netinst
+@end example
+
+@node disk_images_sheepdog
+@subsection Sheepdog disk images
+
+Sheepdog is a distributed storage system for QEMU.  It provides highly
+available block level storage volumes that can be attached to
+QEMU-based virtual machines.
+
+You can create a Sheepdog disk image with the command:
+@example
+qemu-img create sheepdog:@var{image} @var{size}
+@end example
+where @var{image} is the Sheepdog image name and @var{size} is its
+size.
+
+To import the existing @var{filename} to Sheepdog, you can use a
+convert command.
+@example
+qemu-img convert @var{filename} sheepdog:@var{image}
+@end example
+
+You can boot from the Sheepdog disk image with the command:
+@example
+qemu sheepdog:@var{image}
+@end example
+
+You can also create a snapshot of the Sheepdog image like qcow2.
+@example
+qemu-img snapshot -c @var{tag} sheepdog:@var{image}
+@end example
+where @var{tag} is a tag name of the newly created snapshot.
+
+To boot from the Sheepdog snapshot, specify the tag name of the
+snapshot.
+@example
+qemu sheepdog:@var{image}:@var{tag}
+@end example
+
+You can create a cloned image from the existing snapshot.
+@example
+qemu-img create -b sheepdog:@var{base}:@var{tag} sheepdog:@var{image}
+@end example
+where @var{base} is a image name of the source snapshot and @var{tag}
+is its tag name.
+
+If the Sheepdog daemon doesn't run on the local host, you need to
+specify one of the Sheepdog servers to connect to.
+@example
+qemu-img create sheepdog:@var{hostname}:@var{port}:@var{image} @var{size}
+qemu sheepdog:@var{hostname}:@var{port}:@var{image}
+@end example
+
 @node pcsys_network
 @section Network emulation
 
@@ -706,6 +768,50 @@ Using the @option{-net socket} option, it is possible to make VLANs
 that span several QEMU instances. See @ref{sec_invocation} to have a
 basic example.
 
+@node pcsys_other_devs
+@section Other Devices
+
+@subsection Inter-VM Shared Memory device
+
+With KVM enabled on a Linux host, a shared memory device is available.  Guests
+map a POSIX shared memory region into the guest as a PCI device that enables
+zero-copy communication to the application level of the guests.  The basic
+syntax is:
+
+@example
+qemu -device ivshmem,size=<size in format accepted by -m>[,shm=<shm name>]
+@end example
+
+If desired, interrupts can be sent between guest VMs accessing the same shared
+memory region.  Interrupt support requires using a shared memory server and
+using a chardev socket to connect to it.  The code for the shared memory server
+is qemu.git/contrib/ivshmem-server.  An example syntax when using the shared
+memory server is:
+
+@example
+qemu -device ivshmem,size=<size in format accepted by -m>[,chardev=<id>]
+                        [,msi=on][,ioeventfd=on][,vectors=n][,role=peer|master]
+qemu -chardev socket,path=<path>,id=<id>
+@end example
+
+When using the server, the guest will be assigned a VM ID (>=0) that allows guests
+using the same server to communicate via interrupts.  Guests can read their
+VM ID from a device register (see example code).  Since receiving the shared
+memory region from the server is asynchronous, there is a (small) chance the
+guest may boot before the shared memory is attached.  To allow an application
+to ensure shared memory is attached, the VM ID register will return -1 (an
+invalid VM ID) until the memory is attached.  Once the shared memory is
+attached, the VM ID will return the guest's valid VM ID.  With these semantics,
+the guest application can check to ensure the shared memory is attached to the
+guest before proceeding.
+
+The @option{role} argument can be set to either master or peer and will affect
+how the shared memory is migrated.  With @option{role=master}, the guest will
+copy the shared memory on migration to the destination host.  With
+@option{role=peer}, the guest will not be able to migrate with the device attached.
+With the @option{peer} case, the device should be detached and then reattached
+after migration using the PCI hotplug support.
+
 @node direct_linux_boot
 @section Direct Linux Boot
 
@@ -780,7 +886,7 @@ Standard USB keyboard.  Will override the PS/2 keyboard (if present).
 Serial converter. This emulates an FTDI FT232BM chip connected to host character
 device @var{dev}. The available character devices are the same as for the
 @code{-serial} option. The @code{vendorid} and @code{productid} options can be
-used to override the default 0403:6001. For instance, 
+used to override the default 0403:6001. For instance,
 @example
 usb_add serial:productid=FA00:tcp:192.168.0.2:4444
 @end example
@@ -995,7 +1101,7 @@ qemu [...OPTIONS...] -vnc :1,tls,x509,sasl -monitor stdio
 
 The GNU TLS packages provides a command called @code{certtool} which can
 be used to generate certificates and keys in PEM format. At a minimum it
-is neccessary to setup a certificate authority, and issue certificates to
+is necessary to setup a certificate authority, and issue certificates to
 each server. If using certificates for authentication, then each client
 will also need to be issued a certificate. The recommendation is for the
 server to keep its certificates in either @code{/etc/pki/qemu} or for
@@ -1138,7 +1244,7 @@ keytab: /etc/qemu/krb5.tab
 For this to work the administrator of your KDC must generate a Kerberos
 principal for the server, with a name of  'qemu/somehost.example.com@@EXAMPLE.COM'
 replacing 'somehost.example.com' with the fully qualified host name of the
-machine running QEMU, and 'EXAMPLE.COM' with the Keberos Realm.
+machine running QEMU, and 'EXAMPLE.COM' with the Kerberos Realm.
 
 Other configurations will be left as an exercise for the reader. It should
 be noted that only Digest-MD5 and GSSAPI provides a SSF layer for data
@@ -1720,7 +1826,7 @@ enabled in the kernel, and expect 512M RAM.  Kernels for The PBX-A9 board
 should have CONFIG_SPARSEMEM enabled, CONFIG_REALVIEW_HIGH_PHYS_OFFSET
 disabled and expect 1024M RAM.
 
-The following devices are emuilated:
+The following devices are emulated:
 
 @itemize @minus
 @item
@@ -1820,7 +1926,7 @@ Secure Digital card connected to OMAP MMC/SD host
 @item
 Three OMAP on-chip UARTs and on-chip STI debugging console
 @item
-A Bluetooth(R) transciever and HCI connected to an UART
+A Bluetooth(R) transceiver and HCI connected to an UART
 @item
 Mentor Graphics "Inventra" dual-role USB controller embedded in a TI
 TUSB6010 chip - only USB host mode is supported
@@ -1882,7 +1988,7 @@ MV88W8618 audio controller, WM8750 CODEC and mixer
 @end itemize
 
 The Siemens SX1 models v1 and v2 (default) basic emulation.
-The emulaton includes the following elements:
+The emulation includes the following elements:
 
 @itemize @minus
 @item
@@ -2078,7 +2184,7 @@ Then you can launch the precompiled @file{ls} x86 executable:
 @example
 qemu-i386 tests/i386/ls
 @end example
-You can look at @file{qemu-binfmt-conf.sh} so that
+You can look at @file{scripts/qemu-binfmt-conf.sh} so that
 QEMU is automatically launched by the Linux kernel when you try to
 launch x86 executables. It requires the @code{binfmt_misc} module in the
 Linux kernel.
@@ -2124,7 +2230,7 @@ qemu-i386 /usr/local/qemu-i386/wine/bin/wine \
 @subsection Command line options
 
 @example
-usage: qemu-i386 [-h] [-d] [-L path] [-s size] [-cpu model] [-g port] [-B offset] program [arguments...]
+usage: qemu-i386 [-h] [-d] [-L path] [-s size] [-cpu model] [-g port] [-B offset] [-R size] program [arguments...]
 @end example
 
 @table @option
@@ -2136,10 +2242,20 @@ Set the x86 elf interpreter prefix (default=/usr/local/qemu-i386)
 Set the x86 stack size in bytes (default=524288)
 @item -cpu model
 Select CPU model (-cpu ? for list and additional feature selection)
+@item -ignore-environment
+Start with an empty environment. Without this option,
+the initial environment is a copy of the caller's environment.
+@item -E @var{var}=@var{value}
+Set environment @var{var} to @var{value}.
+@item -U @var{var}
+Remove @var{var} from the environment.
 @item -B offset
 Offset guest address by the specified number of bytes.  This is useful when
-the address region rewuired by guest applications is reserved on the host.
-Ths option is currently only supported on some hosts.
+the address region required by guest applications is reserved on the host.
+This option is currently only supported on some hosts.
+@item -R size
+Pre-allocate a guest virtual address space of the given size (in bytes).
+"G", "M", and "k" suffixes may be used when specifying the size.
 @end table
 
 Debug options:
@@ -2356,6 +2472,13 @@ Print the help
 Set the library root path (default=/)
 @item -s size
 Set the stack size in bytes (default=524288)
+@item -ignore-environment
+Start with an empty environment. Without this option,
+the initial environment is a copy of the caller's environment.
+@item -E @var{var}=@var{value}
+Set environment @var{var} to @var{value}.
+@item -U @var{var}
+Remove @var{var} from the environment.
 @item -bsd type
 Set the type of the emulated BSD Operating system. Valid values are
 FreeBSD, NetBSD and OpenBSD (default).
@@ -2424,7 +2547,7 @@ correct SDL directory when invoked.
 
 @item Install the MinGW version of zlib and make sure
 @file{zlib.h} and @file{libz.dll.a} are in
-MingGW's default header and linker search paths.
+MinGW's default header and linker search paths.
 
 @item Extract the current version of QEMU.
 
@@ -2459,7 +2582,7 @@ the QEMU configuration script.
 
 @item Install the MinGW version of zlib and make sure
 @file{zlib.h} and @file{libz.dll.a} are in
-MingGW's default header and linker search paths.
+MinGW's default header and linker search paths.
 
 @item
 Configure QEMU for Windows cross compilation:
@@ -2468,7 +2591,7 @@ PATH=/usr/i686-pc-mingw32/sys-root/mingw/bin:$PATH ./configure --cross-prefix='i
 @end example
 The example assumes @file{sdl-config} is installed under @file{/usr/i686-pc-mingw32/sys-root/mingw/bin} and
 MinGW cross compilation tools have names like @file{i686-pc-mingw32-gcc} and @file{i686-pc-mingw32-strip}.
-We set the @code{PATH} environment variable to ensure the MingW version of @file{sdl-config} is used and
+We set the @code{PATH} environment variable to ensure the MinGW version of @file{sdl-config} is used and
 use --cross-prefix to specify the name of the cross compiler.
 You can also use --prefix to set the Win32 install path which defaults to @file{c:/Program Files/Qemu}.
 

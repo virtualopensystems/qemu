@@ -29,18 +29,19 @@
 #include "devices.h"
 #include "sysbus.h"
 #include "qdev-addr.h"
+#include "range.h"
 
 /*
- * Status: 2008/11/02
+ * Status: 2010/05/07
  *   - Minimum implementation for Linux console : mmio regs and CRT layer.
- *   - Always updates full screen.
+ *   - 2D grapihcs acceleration partially supported : only fill rectangle.
  *
  * TODO:
  *   - Panel support
- *   - Hardware cursor support
  *   - Touch panel support
  *   - USB support
  *   - UART support
+ *   - More 2D graphics engine support
  *   - Performance tuning
  */
 
@@ -510,6 +511,19 @@ typedef struct SM501State {
     uint32_t dc_crt_hwc_color_1_2;
     uint32_t dc_crt_hwc_color_3;
 
+    uint32_t twoD_source;
+    uint32_t twoD_destination;
+    uint32_t twoD_dimension;
+    uint32_t twoD_control;
+    uint32_t twoD_pitch;
+    uint32_t twoD_foreground;
+    uint32_t twoD_stretch;
+    uint32_t twoD_color_compare_mask;
+    uint32_t twoD_mask;
+    uint32_t twoD_window_width;
+    uint32_t twoD_source_base;
+    uint32_t twoD_destination_base;
+
 } SM501State;
 
 static uint32_t get_local_mem_size_index(uint32_t size)
@@ -617,6 +631,99 @@ static int within_hwc_y_range(SM501State *state, int y, int crt)
 {
     int hwc_y = get_hwc_y(state, crt);
     return (hwc_y <= y && y < hwc_y + SM501_HWC_HEIGHT);
+}
+
+static void sm501_2d_operation(SM501State * s)
+{
+    /* obtain operation parameters */
+    int operation = (s->twoD_control >> 16) & 0x1f;
+    int rtl = s->twoD_control & 0x8000000;
+    int src_x = (s->twoD_source >> 16) & 0x01FFF;
+    int src_y = s->twoD_source & 0xFFFF;
+    int dst_x = (s->twoD_destination >> 16) & 0x01FFF;
+    int dst_y = s->twoD_destination & 0xFFFF;
+    int operation_width = (s->twoD_dimension >> 16) & 0x1FFF;
+    int operation_height = s->twoD_dimension & 0xFFFF;
+    uint32_t color = s->twoD_foreground;
+    int format_flags = (s->twoD_stretch >> 20) & 0x3;
+    int addressing = (s->twoD_stretch >> 16) & 0xF;
+
+    /* get frame buffer info */
+    uint8_t * src = s->local_mem + (s->twoD_source_base & 0x03FFFFFF);
+    uint8_t * dst = s->local_mem + (s->twoD_destination_base & 0x03FFFFFF);
+    int src_width = (s->dc_crt_h_total & 0x00000FFF) + 1;
+    int dst_width = (s->dc_crt_h_total & 0x00000FFF) + 1;
+
+    if (addressing != 0x0) {
+        printf("%s: only XY addressing is supported.\n", __func__);
+        abort();
+    }
+
+    if ((s->twoD_source_base & 0x08000000) ||
+        (s->twoD_destination_base & 0x08000000)) {
+        printf("%s: only local memory is supported.\n", __func__);
+        abort();
+    }
+
+    switch (operation) {
+    case 0x00: /* copy area */
+#define COPY_AREA(_bpp, _pixel_type, rtl) {                                 \
+        int y, x, index_d, index_s;                                         \
+        for (y = 0; y < operation_height; y++) {                            \
+            for (x = 0; x < operation_width; x++) {                         \
+                if (rtl) {                                                  \
+                    index_s = ((src_y - y) * src_width + src_x - x) * _bpp; \
+                    index_d = ((dst_y - y) * dst_width + dst_x - x) * _bpp; \
+                } else {                                                    \
+                    index_s = ((src_y + y) * src_width + src_x + x) * _bpp; \
+                    index_d = ((dst_y + y) * dst_width + dst_x + x) * _bpp; \
+                }                                                           \
+                *(_pixel_type*)&dst[index_d] = *(_pixel_type*)&src[index_s];\
+            }                                                               \
+        }                                                                   \
+    }
+        switch (format_flags) {
+        case 0:
+            COPY_AREA(1, uint8_t, rtl);
+            break;
+        case 1:
+            COPY_AREA(2, uint16_t, rtl);
+            break;
+        case 2:
+            COPY_AREA(4, uint32_t, rtl);
+            break;
+        }
+        break;
+
+    case 0x01: /* fill rectangle */
+#define FILL_RECT(_bpp, _pixel_type) {                                      \
+        int y, x;                                                           \
+        for (y = 0; y < operation_height; y++) {                            \
+            for (x = 0; x < operation_width; x++) {                         \
+                int index = ((dst_y + y) * dst_width + dst_x + x) * _bpp;   \
+                *(_pixel_type*)&dst[index] = (_pixel_type)color;            \
+            }                                                               \
+        }                                                                   \
+    }
+
+        switch (format_flags) {
+        case 0:
+            FILL_RECT(1, uint8_t);
+            break;
+        case 1:
+            FILL_RECT(2, uint16_t);
+            break;
+        case 2:
+            FILL_RECT(4, uint32_t);
+            break;
+        }
+        break;
+
+    default:
+        printf("non-implemented SM501 2D operation. %d\n", operation);
+        abort();
+        break;
+    }
 }
 
 static uint32_t sm501_system_config_read(void *opaque, target_phys_addr_t addr)
@@ -739,7 +846,7 @@ static uint32_t sm501_palette_read(void *opaque, target_phys_addr_t addr)
     /* TODO : consider BYTE/WORD access */
     /* TODO : consider endian */
 
-    assert(0 <= addr && addr < 0x400 * 3);
+    assert(range_covers_byte(0, 0x400 * 3, addr));
     return *(uint32_t*)&s->dc_palette[addr];
 }
 
@@ -753,7 +860,7 @@ static void sm501_palette_write(void *opaque,
     /* TODO : consider BYTE/WORD access */
     /* TODO : consider endian */
 
-    assert(0 <= addr && addr < 0x400 * 3);
+    assert(range_covers_byte(0, 0x400 * 3, addr));
     *(uint32_t*)&s->dc_palette[addr] = value;
 }
 
@@ -969,6 +1076,95 @@ static CPUWriteMemoryFunc * const sm501_disp_ctrl_writefn[] = {
     &sm501_disp_ctrl_write,
 };
 
+static uint32_t sm501_2d_engine_read(void *opaque, target_phys_addr_t addr)
+{
+    SM501State * s = (SM501State *)opaque;
+    uint32_t ret = 0;
+    SM501_DPRINTF("sm501 2d engine regs : read addr=%x\n", (int)addr);
+
+    switch(addr) {
+    case SM501_2D_SOURCE_BASE:
+        ret = s->twoD_source_base;
+        break;
+    default:
+        printf("sm501 disp ctrl : not implemented register read."
+               " addr=%x\n", (int)addr);
+        abort();
+    }
+
+    return ret;
+}
+
+static void sm501_2d_engine_write(void *opaque,
+                                  target_phys_addr_t addr, uint32_t value)
+{
+    SM501State * s = (SM501State *)opaque;
+    SM501_DPRINTF("sm501 2d engine regs : write addr=%x, val=%x\n",
+                  addr, value);
+
+    switch(addr) {
+    case SM501_2D_SOURCE:
+        s->twoD_source = value;
+        break;
+    case SM501_2D_DESTINATION:
+        s->twoD_destination = value;
+        break;
+    case SM501_2D_DIMENSION:
+        s->twoD_dimension = value;
+        break;
+    case SM501_2D_CONTROL:
+        s->twoD_control = value;
+
+        /* do 2d operation if start flag is set. */
+        if (value & 0x80000000) {
+            sm501_2d_operation(s);
+            s->twoD_control &= ~0x80000000; /* start flag down */
+        }
+
+        break;
+    case SM501_2D_PITCH:
+        s->twoD_pitch = value;
+        break;
+    case SM501_2D_FOREGROUND:
+        s->twoD_foreground = value;
+        break;
+    case SM501_2D_STRETCH:
+        s->twoD_stretch = value;
+        break;
+    case SM501_2D_COLOR_COMPARE_MASK:
+        s->twoD_color_compare_mask = value;
+        break;
+    case SM501_2D_MASK:
+        s->twoD_mask = value;
+        break;
+    case SM501_2D_WINDOW_WIDTH:
+        s->twoD_window_width = value;
+        break;
+    case SM501_2D_SOURCE_BASE:
+        s->twoD_source_base = value;
+        break;
+    case SM501_2D_DESTINATION_BASE:
+        s->twoD_destination_base = value;
+        break;
+    default:
+        printf("sm501 2d engine : not implemented register write."
+               " addr=%x, val=%x\n", (int)addr, value);
+        abort();
+    }
+}
+
+static CPUReadMemoryFunc * const sm501_2d_engine_readfn[] = {
+    NULL,
+    NULL,
+    &sm501_2d_engine_read,
+};
+
+static CPUWriteMemoryFunc * const sm501_2d_engine_writefn[] = {
+    NULL,
+    NULL,
+    &sm501_2d_engine_write,
+};
+
 /* draw line functions for all console modes */
 
 #include "pixel_ops.h"
@@ -1078,8 +1274,8 @@ static void sm501_draw_crt(SM501State * s)
     draw_hwc_line_func * draw_hwc_line = NULL;
     int full_update = 0;
     int y_start = -1;
-    int page_min = 0x7fffffff;
-    int page_max = -1;
+    ram_addr_t page_min = ~0l;
+    ram_addr_t page_max = 0l;
     ram_addr_t offset = s->local_mem_offset;
 
     /* choose draw_line function */
@@ -1175,9 +1371,10 @@ static void sm501_draw_crt(SM501State * s)
 	dpy_update(s->ds, 0, y_start, width, y - y_start);
 
     /* clear dirty flags */
-    if (page_max != -1)
+    if (page_min != ~0l) {
 	cpu_physical_memory_reset_dirty(page_min, page_max + TARGET_PAGE_SIZE,
 					VGA_DIRTY_FLAG);
+    }
 }
 
 static void sm501_update_display(void *opaque)
@@ -1195,6 +1392,7 @@ void sm501_init(uint32_t base, uint32_t local_mem_bytes, qemu_irq irq,
     DeviceState *dev;
     int sm501_system_config_index;
     int sm501_disp_ctrl_index;
+    int sm501_2d_engine_index;
 
     /* allocate management data region */
     s = (SM501State *)qemu_mallocz(sizeof(SM501State));
@@ -1209,20 +1407,27 @@ void sm501_init(uint32_t base, uint32_t local_mem_bytes, qemu_irq irq,
     s->dc_crt_control = 0x00010000;
 
     /* allocate local memory */
-    s->local_mem_offset = qemu_ram_alloc(local_mem_bytes);
+    s->local_mem_offset = qemu_ram_alloc(NULL, "sm501.local", local_mem_bytes);
     s->local_mem = qemu_get_ram_ptr(s->local_mem_offset);
     cpu_register_physical_memory(base, local_mem_bytes, s->local_mem_offset);
 
     /* map mmio */
     sm501_system_config_index
 	= cpu_register_io_memory(sm501_system_config_readfn,
-				 sm501_system_config_writefn, s);
+				 sm501_system_config_writefn, s,
+                                 DEVICE_NATIVE_ENDIAN);
     cpu_register_physical_memory(base + MMIO_BASE_OFFSET,
 				 0x6c, sm501_system_config_index);
     sm501_disp_ctrl_index = cpu_register_io_memory(sm501_disp_ctrl_readfn,
-						   sm501_disp_ctrl_writefn, s);
+						   sm501_disp_ctrl_writefn, s,
+                                                   DEVICE_NATIVE_ENDIAN);
     cpu_register_physical_memory(base + MMIO_BASE_OFFSET + SM501_DC,
                                  0x1000, sm501_disp_ctrl_index);
+    sm501_2d_engine_index = cpu_register_io_memory(sm501_2d_engine_readfn,
+                                                   sm501_2d_engine_writefn, s,
+                                                   DEVICE_NATIVE_ENDIAN);
+    cpu_register_physical_memory(base + MMIO_BASE_OFFSET + SM501_2D_ENGINE,
+                                 0x54, sm501_2d_engine_index);
 
     /* bridge to usb host emulation module */
     dev = qdev_create(NULL, "sysbus-ohci");

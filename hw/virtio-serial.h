@@ -2,7 +2,7 @@
  * Virtio Serial / Console Support
  *
  * Copyright IBM, Corp. 2008
- * Copyright Red Hat, Inc. 2009
+ * Copyright Red Hat, Inc. 2009, 2010
  *
  * Authors:
  *  Christian Ehrhardt <ehrhardt@linux.vnet.ibm.com>
@@ -15,7 +15,6 @@
 #ifndef _QEMU_VIRTIO_SERIAL_H
 #define _QEMU_VIRTIO_SERIAL_H
 
-#include <stdbool.h>
 #include "qdev.h"
 #include "virtio.h"
 
@@ -27,6 +26,8 @@
 /* Features supported */
 #define VIRTIO_CONSOLE_F_MULTIPORT	1
 
+#define VIRTIO_CONSOLE_BAD_ID           (~(uint32_t)0)
+
 struct virtio_console_config {
     /*
      * These two fields are used by VIRTIO_CONSOLE_F_SIZE which
@@ -36,7 +37,6 @@ struct virtio_console_config {
     uint16_t rows;
 
     uint32_t max_nr_ports;
-    uint32_t nr_ports;
 } __attribute__((packed));
 
 struct virtio_console_control {
@@ -45,13 +45,20 @@ struct virtio_console_control {
     uint16_t value;		/* Extra information for the key */
 };
 
+struct virtio_serial_conf {
+    /* Max. number of ports we can have for a virtio-serial device */
+    uint32_t max_virtserial_ports;
+};
+
 /* Some events for the internal messages (control packets) */
-#define VIRTIO_CONSOLE_PORT_READY	0
-#define VIRTIO_CONSOLE_CONSOLE_PORT	1
-#define VIRTIO_CONSOLE_RESIZE		2
-#define VIRTIO_CONSOLE_PORT_OPEN	3
-#define VIRTIO_CONSOLE_PORT_NAME	4
-#define VIRTIO_CONSOLE_PORT_REMOVE	5
+#define VIRTIO_CONSOLE_DEVICE_READY	0
+#define VIRTIO_CONSOLE_PORT_ADD		1
+#define VIRTIO_CONSOLE_PORT_REMOVE	2
+#define VIRTIO_CONSOLE_PORT_READY	3
+#define VIRTIO_CONSOLE_CONSOLE_PORT	4
+#define VIRTIO_CONSOLE_RESIZE		5
+#define VIRTIO_CONSOLE_PORT_OPEN	6
+#define VIRTIO_CONSOLE_PORT_NAME	7
 
 /* == In-qemu interface == */
 
@@ -59,11 +66,6 @@ typedef struct VirtIOSerial VirtIOSerial;
 typedef struct VirtIOSerialBus VirtIOSerialBus;
 typedef struct VirtIOSerialPort VirtIOSerialPort;
 typedef struct VirtIOSerialPortInfo VirtIOSerialPortInfo;
-
-typedef struct VirtIOSerialDevice {
-    DeviceState qdev;
-    VirtIOSerialPortInfo *info;
-} VirtIOSerialDevice;
 
 /*
  * This is the state that's shared between all the ports.  Some of the
@@ -100,6 +102,23 @@ struct VirtIOSerialPort {
      */
     uint32_t id;
 
+    /*
+     * This is the elem that we pop from the virtqueue.  A slow
+     * backend that consumes guest data (e.g. the file backend for
+     * qemu chardevs) can cause the guest to block till all the output
+     * is flushed.  This isn't desired, so we keep a note of the last
+     * element popped and continue consuming it once the backend
+     * becomes writable again.
+     */
+    VirtQueueElement elem;
+
+    /*
+     * The index and the offset into the iov buffer that was popped in
+     * elem above.
+     */
+    uint32_t iov_idx;
+    uint64_t iov_offset;
+
     /* Identify if this is a port that binds with hvc in the guest */
     uint8_t is_console;
 
@@ -107,6 +126,8 @@ struct VirtIOSerialPort {
     bool guest_connected;
     /* Is this device open for IO on the host? */
     bool host_connected;
+    /* Do apps not want to receive data? */
+    bool throttled;
 };
 
 struct VirtIOSerialPortInfo {
@@ -115,12 +136,12 @@ struct VirtIOSerialPortInfo {
      * The per-port (or per-app) init function that's called when a
      * new device is found on the bus.
      */
-    int (*init)(VirtIOSerialDevice *dev);
+    int (*init)(VirtIOSerialPort *port);
     /*
      * Per-port exit function that's called when a port gets
      * hot-unplugged or removed.
      */
-    int (*exit)(VirtIOSerialDevice *dev);
+    int (*exit)(VirtIOSerialPort *port);
 
     /* Callbacks for guest events */
         /* Guest opened device. */
@@ -133,10 +154,11 @@ struct VirtIOSerialPortInfo {
 
     /*
      * Guest wrote some data to the port. This data is handed over to
-     * the app via this callback. The app should return the number of
-     * bytes it successfully consumed.
+     * the app via this callback.  The app can return a size less than
+     * 'len'.  In this case, throttling will be enabled for this port.
      */
-    size_t (*have_data)(VirtIOSerialPort *port, const uint8_t *buf, size_t len);
+    ssize_t (*have_data)(VirtIOSerialPort *port, const uint8_t *buf,
+                         size_t len);
 };
 
 /* Interface to the virtio-serial bus */
@@ -169,5 +191,12 @@ ssize_t virtio_serial_write(VirtIOSerialPort *port, const uint8_t *buf,
  * Query whether a guest is ready to receive data.
  */
 size_t virtio_serial_guest_ready(VirtIOSerialPort *port);
+
+/*
+ * Flow control: Ports can signal to the virtio-serial core to stop
+ * sending data or re-start sending data, depending on the 'throttle'
+ * value here.
+ */
+void virtio_serial_throttle_port(VirtIOSerialPort *port, bool throttle);
 
 #endif

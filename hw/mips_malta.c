@@ -37,13 +37,15 @@
 #include "vmware_vga.h"
 #include "qemu-char.h"
 #include "sysemu.h"
-#include "audio/audio.h"
+#include "arch_init.h"
 #include "boards.h"
 #include "qemu-log.h"
 #include "mips-bios.h"
 #include "ide.h"
 #include "loader.h"
 #include "elf.h"
+#include "mc146818rtc.h"
+#include "blockdev.h"
 
 //#define DEBUG_BOARD_INIT
 
@@ -66,7 +68,7 @@ typedef struct {
     SerialState *uart;
 } MaltaFPGAState;
 
-static PITState *pit;
+static ISADevice *pit;
 
 static struct _loaderparams {
     int ram_size;
@@ -434,7 +436,8 @@ static MaltaFPGAState *malta_fpga_init(target_phys_addr_t base, qemu_irq uart_ir
     s = (MaltaFPGAState *)qemu_mallocz(sizeof(MaltaFPGAState));
 
     malta = cpu_register_io_memory(malta_fpga_read,
-                                   malta_fpga_write, s);
+                                   malta_fpga_write, s,
+                                   DEVICE_NATIVE_ENDIAN);
 
     cpu_register_physical_memory(base, 0x900, malta);
     /* 0xa00 is less than a page, so will still get the right offsets.  */
@@ -453,27 +456,6 @@ static MaltaFPGAState *malta_fpga_init(target_phys_addr_t base, qemu_irq uart_ir
 
     return s;
 }
-
-/* Audio support */
-#ifdef HAS_AUDIO
-static void audio_init (PCIBus *pci_bus)
-{
-    struct soundhw *c;
-    int audio_enabled = 0;
-
-    for (c = soundhw; !audio_enabled && c->name; ++c) {
-        audio_enabled = c->enabled;
-    }
-
-    if (audio_enabled) {
-        for (c = soundhw; c->name; ++c) {
-            if (c->enabled) {
-                c->init.init_pci(pci_bus);
-            }
-        }
-    }
-}
-#endif
 
 /* Network support */
 static void network_init(void)
@@ -654,7 +636,8 @@ static void write_bootloader (CPUState *env, uint8_t *base,
 
 }
 
-static void prom_set(uint32_t* prom_buf, int index, const char *string, ...)
+static void GCC_FMT_ATTR(3, 4) prom_set(uint32_t* prom_buf, int index,
+                                        const char *string, ...)
 {
     va_list ap;
     int32_t table_addr;
@@ -728,13 +711,13 @@ static int64_t load_kernel (void)
     prom_size = ENVP_NB_ENTRIES * (sizeof(int32_t) + ENVP_ENTRY_SIZE);
     prom_buf = qemu_malloc(prom_size);
 
-    prom_set(prom_buf, prom_index++, loaderparams.kernel_filename);
+    prom_set(prom_buf, prom_index++, "%s", loaderparams.kernel_filename);
     if (initrd_size > 0) {
         prom_set(prom_buf, prom_index++, "rd_start=0x%" PRIx64 " rd_size=%li %s",
                  cpu_mips_phys_to_kseg0(NULL, initrd_offset), initrd_size,
                  loaderparams.kernel_cmdline);
     } else {
-        prom_set(prom_buf, prom_index++, loaderparams.kernel_cmdline);
+        prom_set(prom_buf, prom_index++, "%s", loaderparams.kernel_cmdline);
     }
 
     prom_set(prom_buf, prom_index++, "memsize");
@@ -762,6 +745,15 @@ static void main_cpu_reset(void *opaque)
     }
 }
 
+static void cpu_request_exit(void *opaque, int irq, int level)
+{
+    CPUState *env = cpu_single_env;
+
+    if (env && level) {
+        cpu_exit(env);
+    }
+}
+
 static
 void mips_malta_init (ram_addr_t ram_size,
                       const char *boot_device,
@@ -774,14 +766,10 @@ void mips_malta_init (ram_addr_t ram_size,
     target_long bios_size;
     int64_t kernel_entry;
     PCIBus *pci_bus;
-    ISADevice *isa_dev;
     CPUState *env;
-    RTCState *rtc_state;
-    FDCtrl *floppy_controller;
-    MaltaFPGAState *malta_fpga;
     qemu_irq *i8259;
+    qemu_irq *cpu_exit_irq;
     int piix4_devfn;
-    uint8_t *eeprom_buf;
     i2c_bus *smbus;
     int i;
     DriveInfo *dinfo;
@@ -822,8 +810,8 @@ void mips_malta_init (ram_addr_t ram_size,
                 ((unsigned int)ram_size / (1 << 20)));
         exit(1);
     }
-    ram_offset = qemu_ram_alloc(ram_size);
-    bios_offset = qemu_ram_alloc(BIOS_SIZE);
+    ram_offset = qemu_ram_alloc(NULL, "mips_malta.ram", ram_size);
+    bios_offset = qemu_ram_alloc(NULL, "mips_malta.bios", BIOS_SIZE);
 
 
     cpu_register_physical_memory(0, ram_size, ram_offset | IO_MEM_RAM);
@@ -840,7 +828,7 @@ void mips_malta_init (ram_addr_t ram_size,
     be = 0;
 #endif
     /* FPGA */
-    malta_fpga = malta_fpga_init(0x1f000000LL, env->irq[2], serial_hds[2]);
+    malta_fpga_init(0x1f000000LL, env->irq[2], serial_hds[2]);
 
     /* Load firmware in flash / BIOS unless we boot directly into a kernel. */
     if (kernel_filename) {
@@ -902,7 +890,7 @@ void mips_malta_init (ram_addr_t ram_size,
     /* Board ID = 0x420 (Malta Board with CoreLV)
        XXX: theoretically 0x1e000010 should map to flash and 0x1fc00010 should
        map to the board ID. */
-    stl_phys(0x1fc00010LL, 0x00000420);
+    stl_p(qemu_get_ram_ptr(bios_offset) + 0x10, 0x00000420);
 
     /* Init internal devices */
     cpu_mips_irq_init_cpu(env);
@@ -913,41 +901,27 @@ void mips_malta_init (ram_addr_t ram_size,
     i8259 = i8259_init(env->irq[2]);
 
     /* Northbridge */
-    pci_bus = pci_gt64120_init(i8259);
+    pci_bus = gt64120_register(i8259);
 
     /* Southbridge */
-
-    if (drive_get_max_bus(IF_IDE) >= MAX_IDE_BUS) {
-        fprintf(stderr, "qemu: too many IDE bus\n");
-        exit(1);
-    }
-
-    for(i = 0; i < MAX_IDE_BUS * MAX_IDE_DEVS; i++) {
-        hd[i] = drive_get(IF_IDE, i / MAX_IDE_DEVS, i % MAX_IDE_DEVS);
-    }
+    ide_drive_get(hd, MAX_IDE_BUS);
 
     piix4_devfn = piix4_init(pci_bus, 80);
     isa_bus_irqs(i8259);
     pci_piix4_ide_init(pci_bus, hd, piix4_devfn + 1);
     usb_uhci_piix4_init(pci_bus, piix4_devfn + 2);
-    smbus = piix4_pm_init(pci_bus, piix4_devfn + 3, 0x1100, isa_reserve_irq(9),
+    smbus = piix4_pm_init(pci_bus, piix4_devfn + 3, 0x1100, isa_get_irq(9),
                           NULL, NULL, 0);
-    eeprom_buf = qemu_mallocz(8 * 256); /* XXX: make this persistent */
-    for (i = 0; i < 8; i++) {
-        /* TODO: Populate SPD eeprom data.  */
-        DeviceState *eeprom;
-        eeprom = qdev_create((BusState *)smbus, "smbus-eeprom");
-        qdev_prop_set_uint8(eeprom, "address", 0x50 + i);
-        qdev_prop_set_ptr(eeprom, "data", eeprom_buf + (i * 256));
-        qdev_init_nofail(eeprom);
-    }
-    pit = pit_init(0x40, isa_reserve_irq(0));
-    DMA_init(0);
+    /* TODO: Populate SPD eeprom data.  */
+    smbus_eeprom_init(smbus, 8, NULL, 0);
+    pit = pit_init(0x40, 0);
+    cpu_exit_irq = qemu_allocate_irqs(cpu_request_exit, NULL, 1);
+    DMA_init(0, cpu_exit_irq);
 
     /* Super I/O */
-    isa_dev = isa_create_simple("i8042");
- 
-    rtc_state = rtc_init(2000);
+    isa_create_simple("i8042");
+
+    rtc_init(2000, NULL);
     serial_isa_init(0, serial_hds[0]);
     serial_isa_init(1, serial_hds[1]);
     if (parallel_hds[0])
@@ -955,12 +929,10 @@ void mips_malta_init (ram_addr_t ram_size,
     for(i = 0; i < MAX_FD; i++) {
         fd[i] = drive_get(IF_FLOPPY, 0, i);
     }
-    floppy_controller = fdctrl_init_isa(fd);
+    fdctrl_init_isa(fd);
 
     /* Sound card */
-#ifdef HAS_AUDIO
-    audio_init(pci_bus);
-#endif
+    audio_init(NULL, pci_bus);
 
     /* Network card */
     network_init();
@@ -969,9 +941,13 @@ void mips_malta_init (ram_addr_t ram_size,
     if (cirrus_vga_enabled) {
         pci_cirrus_vga_init(pci_bus);
     } else if (vmsvga_enabled) {
-        pci_vmsvga_init(pci_bus);
+        if (!pci_vmsvga_init(pci_bus)) {
+            fprintf(stderr, "Warning: vmware_vga not available,"
+                    " using standard VGA instead\n");
+            pci_vga_init(pci_bus);
+        }
     } else if (std_vga_enabled) {
-        pci_vga_init(pci_bus, 0, 0);
+        pci_vga_init(pci_bus);
     }
 }
 
