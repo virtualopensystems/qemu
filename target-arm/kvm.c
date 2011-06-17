@@ -69,7 +69,8 @@ int kvm_arch_put_registers(CPUState *env, int level)
     regs.spsr[MODE_ABT] = env->banked_spsr[2];
     regs.spsr[MODE_UND] = env->banked_spsr[3];
 
-    //regs.cp15.c0_cpuid = env->cp15.c0_cpuid;
+    regs.cp15.c0_midr = env->cp15.c0_cpuid;
+    regs.cp15.c1_sys = env->cp15.c1_sys;
 
     ret = kvm_vcpu_ioctl(env, KVM_SET_REGS, &regs);
 
@@ -107,7 +108,8 @@ int kvm_arch_get_registers(CPUState *env)
     regs.spsr[MODE_ABT] = env->banked_spsr[2];
     regs.spsr[MODE_UND] = env->banked_spsr[3];
 
-    //env->cp15.c0_cpuid = regs.cp15.c0_cpuid;
+    env->cp15.c0_cpuid = regs.cp15.c0_midr;
+    env->cp15.c1_sys = regs.cp15.c1_sys;
     env->cp15.c2_base0 = regs.cp15.c2_base0;
     env->cp15.c2_base1 = regs.cp15.c2_base1;
     env->cp15.c3 = regs.cp15.c3_dacr;
@@ -119,29 +121,31 @@ int kvm_arch_get_registers(CPUState *env)
 #define KVM_ARM_EXCEPTION_FIQ 0x01
 int kvm_arch_interrupt(CPUState *env, int irq, int level)
 {
-    struct kvm_interrupt intr;
+    struct kvm_irq_level irq_level;
+    int vcpu_idx = 0; /* Assume non-SMP for now */
     int ret;
 
     if (level)
-        intr.raise = 1;
+        irq_level.level = 1;
     else
-        intr.raise = 0;
+        irq_level.level = 0;
 
     switch (irq) {
     case ARM_PIC_CPU_IRQ:
-        intr.irq = KVM_ARM_EXCEPTION_IRQ;
+        irq_level.irq = KVM_ARM_IRQ_LINE * vcpu_idx;
         break;
     case ARM_PIC_CPU_FIQ:
-        intr.irq = KVM_ARM_EXCEPTION_FIQ;
+        irq_level.irq = (KVM_ARM_FIQ_LINE * vcpu_idx) + 1;
         break;
     default:
         fprintf(stderr, "unsupported ARM irq injection\n");
         abort();
     }
 
-    ret = kvm_vcpu_ioctl(env, KVM_INTERRUPT, &intr);
+    ret = kvm_vcpu_ioctl(env, KVM_IRQ_LINE, &irq_level);
     if (ret) {
-        fprintf(stderr, "kvm_vcpu_ioctl(env, KVM_INTERRUPT, &intr) failed\n");
+        fprintf(stderr, "kvm_vcpu_ioctl(env, KVM_IRQ_LINE, &irq_level) "
+                        "failed\n");
         abort();
     }
 

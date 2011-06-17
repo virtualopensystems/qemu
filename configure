@@ -812,11 +812,6 @@ case "$cpu" in
     ia64*)
            host_guest_base="yes"
            ;;
-    armv4l)
-    	   echo "armv4l"
-           ARCH_CFLAGS="-mcpu=arm1136j-s -march=armv6"
-           ARCH_LDFLAGS="-mcpu=arm1136j-s -march=armv6"
-           ;;
     hppa*)
            host_guest_base="yes"
            ;;
