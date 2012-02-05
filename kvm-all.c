@@ -833,6 +833,16 @@ int kvm_irqchip_commit_routes(KVMState *s)
     return kvm_vm_ioctl(s, KVM_SET_GSI_ROUTING, s->irq_routes);
 }
 
+int kvm_has_gsi_routing(void)
+{
+    return kvm_check_extension(kvm_state, KVM_CAP_IRQ_ROUTING);
+}
+
+int kvm_allows_irq0_override(void)
+{
+    return !kvm_enabled() || !kvm_irqchip_in_kernel() || kvm_has_gsi_routing();
+}
+
 #else /* !KVM_CAP_IRQ_ROUTING */
 
 static void kvm_init_irq_routing(KVMState *s)
@@ -1302,16 +1312,6 @@ int kvm_has_many_ioeventfds(void)
         return 0;
     }
     return kvm_state->many_ioeventfds;
-}
-
-int kvm_has_gsi_routing(void)
-{
-    return kvm_check_extension(kvm_state, KVM_CAP_IRQ_ROUTING);
-}
-
-int kvm_allows_irq0_override(void)
-{
-    return !kvm_enabled() || !kvm_irqchip_in_kernel() || kvm_has_gsi_routing();
 }
 
 void kvm_setup_guest_memory(void *start, size_t size)
