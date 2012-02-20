@@ -1913,6 +1913,7 @@ static void gdb_set_cpu_pc(GDBState *s, target_ulong pc)
     s->c_cpu->pc = pc;
     s->c_cpu->npc = pc + 4;
 #elif defined (TARGET_ARM)
+    cpu_synchronize_state(s->c_cpu);
     s->c_cpu->regs[15] = pc;
 #elif defined (TARGET_SH4)
     s->c_cpu->pc = pc;
