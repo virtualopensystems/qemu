@@ -111,6 +111,7 @@ struct kvm_irq_level {
 	 * ACPI gsi notion of irq.
 	 * For IA-64 (APIC model) IOAPIC0: irq 0-23; IOAPIC1: irq 24-47..
 	 * For X86 (standard AT mode) PIC0/1: irq 0-15. IOAPIC0: 0-23..
+	 * For ARM: IRQ: irq = (2*vcpu_index). FIQ: irq = (2*vcpu_indx + 1).
 	 */
 	union {
 		__u32 irq;
@@ -588,6 +589,7 @@ struct kvm_ppc_pvinfo {
 #define KVM_CAP_TSC_DEADLINE_TIMER 72
 #define KVM_CAP_S390_UCONTROL 73
 #define KVM_CAP_SYNC_REGS 74
+#define KVM_CAP_PCI_2_3 75
 
 #ifdef KVM_CAP_IRQ_ROUTING
 
@@ -784,6 +786,9 @@ struct kvm_s390_ucas_mapping {
 /* Available with KVM_CAP_TSC_CONTROL */
 #define KVM_SET_TSC_KHZ           _IO(KVMIO,  0xa2)
 #define KVM_GET_TSC_KHZ           _IO(KVMIO,  0xa3)
+/* Available with KVM_CAP_PCI_2_3 */
+#define KVM_ASSIGN_SET_INTX_MASK  _IOW(KVMIO,  0xa4, \
+				       struct kvm_assigned_pci_dev)
 
 /*
  * ioctls for vcpu fds
@@ -857,6 +862,8 @@ struct kvm_s390_ucas_mapping {
 #define KVM_SET_ONE_REG		  _IOW(KVMIO,  0xac, struct kvm_one_reg)
 
 #define KVM_DEV_ASSIGN_ENABLE_IOMMU	(1 << 0)
+#define KVM_DEV_ASSIGN_PCI_2_3		(1 << 1)
+#define KVM_DEV_ASSIGN_MASK_INTX	(1 << 2)
 
 struct kvm_assigned_pci_dev {
 	__u32 assigned_dev_id;
