@@ -38,29 +38,37 @@ typedef struct KVMARMGICClass {
 
 static void kvm_arm_gic_set_irq(void *opaque, int irq, int level)
 {
-    /* Meaning of the 'irq' parameter:
-     *  [0..N-1] : external interrupts
-     *  [N..N+31] : PPI (internal) interrupts for CPU 0
-     *  [N+32..N+63] : PPI (internal interrupts for CPU 1
-     *  ...
+    /* Meaning of the 'irq' parameter to KVM:
+     *
+     * bits:  | 31 ... 24 | 23  ... 16 | 15    ...    0 |
+     *
+     * irq_type[0]: out-of-kernel GIC: irq_number 0 is IRQ, irq_number 1 is FIQ
+     * irq_type[1]: in-kernel GIC: SPI, irq_number between 32 and 1019 (incl.)
+     *              (the vcpu_index field is ignored)
+     * irq_type[2]: in-kernel GIC: PPI, irq_number between 16 and 31 (incl.)
+     * ...
      */
     gic_state *s = (gic_state *)opaque;
+    int kvm_irq;
 
 
     if (irq < (s->num_irq - GIC_INTERNAL)) {
         /* External interrupt number 'irq' */
-        kvm_set_irq(kvm_state, irq + GIC_INTERNAL, !!level);
+        kvm_irq = KVM_ARM_IRQ_TYPE_SPI << KVM_ARM_IRQ_TYPE_SHIFT;
+        kvm_irq += irq + GIC_INTERNAL;
     } else {
-        struct kvm_irq_level irq_level;
         int cpu;
         irq -= (s->num_irq - GIC_INTERNAL);
         cpu = irq / GIC_INTERNAL;
         irq %= GIC_INTERNAL;
+
         /* Internal interrupt 'irq' for CPU 'cpu' */
-        irq_level.irq = irq;
-        irq_level.level = !!level;
-        kvm_vcpu_ioctl(qemu_get_cpu(cpu), KVM_IRQ_LINE, &irq_level);
+        kvm_irq = KVM_ARM_IRQ_TYPE_PPI << KVM_ARM_IRQ_TYPE_SHIFT;
+        kvm_irq |= (cpu << KVM_ARM_IRQ_VCPU_SHIFT);
+        kvm_irq += irq;
     }
+
+    kvm_set_irq(kvm_state, kvm_irq, !!level);
 }
 
 static void kvm_arm_gic_put(gic_state *s)
