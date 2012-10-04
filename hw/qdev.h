@@ -233,6 +233,7 @@ extern PropertyInfo qdev_prop_macaddr;
 extern PropertyInfo qdev_prop_losttickpolicy;
 extern PropertyInfo qdev_prop_bios_chs_trans;
 extern PropertyInfo qdev_prop_drive;
+extern PropertyInfo qdev_prop_transport;
 extern PropertyInfo qdev_prop_netdev;
 extern PropertyInfo qdev_prop_vlan;
 extern PropertyInfo qdev_prop_pci_devfn;
@@ -294,6 +295,8 @@ extern PropertyInfo qdev_prop_pci_host_devaddr;
     DEFINE_PROP(_n, _s, _f, qdev_prop_vlan, NetClientState*)
 #define DEFINE_PROP_DRIVE(_n, _s, _f) \
     DEFINE_PROP(_n, _s, _f, qdev_prop_drive, BlockDriverState *)
+#define DEFINE_PROP_TRANSPORT(_n, _s, _f) \
+    DEFINE_PROP(_n, _s, _f, qdev_prop_transport, VirtIOTransportLink *)
 #define DEFINE_PROP_MACADDR(_n, _s, _f)         \
     DEFINE_PROP(_n, _s, _f, qdev_prop_macaddr, MACAddr)
 #define DEFINE_PROP_LOSTTICKPOLICY(_n, _s, _f, _d) \
