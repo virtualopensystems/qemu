@@ -398,6 +398,12 @@ M: Blue Swirl <blauwirbel@gmail.com>
 S: Maintained
 F: hw/sun4u.c
 
+Leon3
+M: Fabien Chouteau <chouteau@adacore.com>
+S: Maintained
+F: hw/leon3.c
+F: hw/grlib*
+
 S390 Machines
 -------------
 S390 Virtio
@@ -468,6 +474,11 @@ M: Gerd Hoffmann <kraxel@redhat.com>
 S: Maintained
 F: hw/usb*
 
+VFIO
+M: Alex Williamson <alex.williamson@redhat.com>
+S: Supported
+F: hw/vfio*
+
 vhost
 M: Michael S. Tsirkin <mst@redhat.com>
 S: Supported
@@ -524,6 +535,12 @@ Character Devices
 M: Anthony Liguori <aliguori@us.ibm.com>
 S: Maintained
 F: qemu-char.c
+
+CPU
+M: Andreas Färber <afaerber@suse.de>
+S: Supported
+F: qom/cpu.c
+F: include/qemu/cpu.h
 
 Device Tree
 M: Peter Crosthwaite <peter.crosthwaite@petalogix.com>

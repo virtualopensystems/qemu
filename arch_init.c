@@ -136,7 +136,6 @@ static struct defconfig_file {
     /* Indicates it is an user config file (disabled by -no-user-config) */
     bool userconfig;
 } default_config_files[] = {
-    { CONFIG_QEMU_DATADIR "/cpus-" TARGET_ARCH ".conf",  false },
     { CONFIG_QEMU_CONFDIR "/qemu.conf",                   true },
     { CONFIG_QEMU_CONFDIR "/target-" TARGET_ARCH ".conf", true },
     { NULL }, /* end of list */
@@ -562,7 +561,7 @@ static int ram_save_iterate(QEMUFile *f, void *opaque)
         if ((i & 63) == 0) {
             uint64_t t1 = (qemu_get_clock_ns(rt_clock) - bwidth) / 1000000;
             if (t1 > MAX_WAIT) {
-                DPRINTF("big wait: " PRIu64 " milliseconds, %d iterations\n",
+                DPRINTF("big wait: %" PRIu64 " milliseconds, %d iterations\n",
                         t1, i);
                 break;
             }
@@ -587,7 +586,7 @@ static int ram_save_iterate(QEMUFile *f, void *opaque)
 
     expected_time = ram_save_remaining() * TARGET_PAGE_SIZE / bwidth;
 
-    DPRINTF("ram_save_live: expected(" PRIu64 ") <= max(" PRIu64 ")?\n",
+    DPRINTF("ram_save_live: expected(%" PRIu64 ") <= max(%" PRIu64 ")?\n",
             expected_time, migrate_max_downtime());
 
     if (expected_time <= migrate_max_downtime()) {
@@ -799,8 +798,8 @@ static int ram_load(QEMUFile *f, void *opaque, int version_id)
     } while (!(flags & RAM_SAVE_FLAG_EOS));
 
 done:
-    DPRINTF("Completed load of VM with exit code %d seq iteration " PRIu64 "\n",
-            ret, seq_iter);
+    DPRINTF("Completed load of VM with exit code %d seq iteration "
+            "%" PRIu64 "\n", ret, seq_iter);
     return ret;
 }
 
@@ -922,11 +921,16 @@ void select_soundhw(const char *optarg)
     if (is_help_option(optarg)) {
     show_valid_cards:
 
+#ifdef HAS_AUDIO_CHOICE
         printf("Valid sound card names (comma separated):\n");
         for (c = soundhw; c->name; ++c) {
             printf ("%-11s %s\n", c->name, c->descr);
         }
         printf("\n-soundhw all will enable all of the above\n");
+#else
+        printf("Machine has no user-selectable audio hardware "
+               "(it may or may not have always-present audio hardware).\n");
+#endif
         exit(!is_help_option(optarg));
     }
     else {

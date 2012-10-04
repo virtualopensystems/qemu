@@ -89,19 +89,6 @@ int cpu_get_pic_interrupt(CPUX86State *env)
 }
 #endif
 
-/* timers for rdtsc */
-
-#if 0
-
-static uint64_t emu_time;
-
-int64_t cpu_get_real_ticks(void)
-{
-    return emu_time++;
-}
-
-#endif
-
 #if defined(CONFIG_USE_NPTL)
 /***********************************************************/
 /* Helper routines for implementing atomic operations.  */
@@ -3143,10 +3130,8 @@ static void handle_arg_cpu(const char *arg)
     cpu_model = strdup(arg);
     if (cpu_model == NULL || is_help_option(cpu_model)) {
         /* XXX: implement xxx_cpu_list for targets that still miss it */
-#if defined(cpu_list_id)
-        cpu_list_id(stdout, &fprintf, "");
-#elif defined(cpu_list)
-        cpu_list(stdout, &fprintf); /* deprecated */
+#if defined(cpu_list)
+        cpu_list(stdout, &fprintf);
 #endif
         exit(1);
     }

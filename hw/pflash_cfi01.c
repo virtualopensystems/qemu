@@ -41,6 +41,7 @@
 #include "block.h"
 #include "qemu-timer.h"
 #include "exec-memory.h"
+#include "host-utils.h"
 
 #define PFLASH_BUG(fmt, ...) \
 do { \
@@ -320,7 +321,7 @@ static void pflash_write(pflash_t *pfl, target_phys_addr_t offset,
         }
         pfl->wcycle++;
         pfl->cmd = cmd;
-        return;
+        break;
     case 1:
         switch (pfl->cmd) {
         case 0x10: /* Single Byte Program */
@@ -375,7 +376,7 @@ static void pflash_write(pflash_t *pfl, target_phys_addr_t offset,
         default:
             goto error_flash;
         }
-        return;
+        break;
     case 2:
         switch (pfl->cmd) {
         case 0xe8: /* Block write */
@@ -406,7 +407,7 @@ static void pflash_write(pflash_t *pfl, target_phys_addr_t offset,
         default:
             goto error_flash;
         }
-        return;
+        break;
     case 3: /* Confirm mode */
         switch (pfl->cmd) {
         case 0xe8: /* Block write */
@@ -422,7 +423,7 @@ static void pflash_write(pflash_t *pfl, target_phys_addr_t offset,
         default:
             goto error_flash;
         }
-        return;
+        break;
     default:
         /* Should never happen */
         DPRINTF("%s: invalid write state\n",  __func__);
@@ -542,42 +543,6 @@ static const MemoryRegionOps pflash_cfi01_ops_le = {
     },
     .endianness = DEVICE_NATIVE_ENDIAN,
 };
-
-/* Count trailing zeroes of a 32 bits quantity */
-static int ctz32 (uint32_t n)
-{
-    int ret;
-
-    ret = 0;
-    if (!(n & 0xFFFF)) {
-        ret += 16;
-        n = n >> 16;
-    }
-    if (!(n & 0xFF)) {
-        ret += 8;
-        n = n >> 8;
-    }
-    if (!(n & 0xF)) {
-        ret += 4;
-        n = n >> 4;
-    }
-    if (!(n & 0x3)) {
-        ret += 2;
-        n = n >> 2;
-    }
-    if (!(n & 0x1)) {
-        ret++;
-#if 0 /* This is not necessary as n is never 0 */
-        n = n >> 1;
-#endif
-    }
-#if 0 /* This is not necessary as n is never 0 */
-    if (!n)
-        ret++;
-#endif
-
-    return ret;
-}
 
 pflash_t *pflash_cfi01_register(target_phys_addr_t base,
                                 DeviceState *qdev, const char *name,
@@ -711,7 +676,7 @@ pflash_t *pflash_cfi01_register(target_phys_addr_t base,
     pfl->cfi_table[0x33] = 'I';
 
     pfl->cfi_table[0x34] = '1';
-    pfl->cfi_table[0x35] = '1';
+    pfl->cfi_table[0x35] = '0';
 
     pfl->cfi_table[0x36] = 0x00;
     pfl->cfi_table[0x37] = 0x00;
@@ -722,6 +687,8 @@ pflash_t *pflash_cfi01_register(target_phys_addr_t base,
 
     pfl->cfi_table[0x3b] = 0x00;
     pfl->cfi_table[0x3c] = 0x00;
+
+    pfl->cfi_table[0x3f] = 0x01; /* Number of protection fields */
 
     return pfl;
 }

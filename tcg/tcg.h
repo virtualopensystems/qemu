@@ -79,6 +79,7 @@ typedef uint64_t TCGRegSet;
 #define TCG_TARGET_HAS_nand_i64         0
 #define TCG_TARGET_HAS_nor_i64          0
 #define TCG_TARGET_HAS_deposit_i64      0
+#define TCG_TARGET_HAS_movcond_i64      0
 #endif
 
 #ifndef TCG_TARGET_deposit_i32_valid
@@ -343,7 +344,7 @@ struct TCGContext {
 
     /* goto_tb support */
     uint8_t *code_buf;
-    unsigned long *tb_next;
+    uintptr_t *tb_next;
     uint16_t *tb_next_offset;
     uint16_t *tb_jmp_offset; /* != NULL if USE_DIRECT_JUMP */
 
@@ -382,12 +383,14 @@ struct TCGContext {
     int64_t interm_time;
     int64_t code_time;
     int64_t la_time;
+    int64_t opt_time;
     int64_t restore_count;
     int64_t restore_time;
 #endif
 
 #ifdef CONFIG_DEBUG_TCG
     int temps_in_use;
+    int goto_tb_issue_mask;
 #endif
 };
 
@@ -458,11 +461,6 @@ static inline TCGv_i64 tcg_temp_local_new_i64(void)
 void tcg_temp_free_i64(TCGv_i64 arg);
 char *tcg_get_arg_str_i64(TCGContext *s, char *buf, int buf_size, TCGv_i64 arg);
 
-static inline bool tcg_arg_is_local(TCGContext *s, TCGArg arg)
-{
-    return s->temps[arg].temp_local;
-}
-
 #if defined(CONFIG_DEBUG_TCG)
 /* If you call tcg_clear_temp_count() at the start of a section of
  * code which is not supposed to leak any TCG temporaries, then
@@ -532,6 +530,15 @@ do {\
     fprintf(stderr, "%s:%d: tcg fatal error\n", __FILE__, __LINE__);\
     abort();\
 } while (0)
+
+#ifdef CONFIG_DEBUG_TCG
+# define tcg_debug_assert(X) do { assert(X); } while (0)
+#elif QEMU_GNUC_PREREQ(4, 5)
+# define tcg_debug_assert(X) \
+    do { if (!(X)) { __builtin_unreachable(); } } while (0)
+#else
+# define tcg_debug_assert(X) do { (void)(X); } while (0)
+#endif
 
 void tcg_add_target_add_op_defs(const TCGTargetOpDef *tdefs);
 

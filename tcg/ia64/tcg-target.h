@@ -133,6 +133,8 @@ typedef enum {
 #define TCG_TARGET_HAS_rot_i64          1
 #define TCG_TARGET_HAS_deposit_i32      0
 #define TCG_TARGET_HAS_deposit_i64      0
+#define TCG_TARGET_HAS_movcond_i32      0
+#define TCG_TARGET_HAS_movcond_i64      0
 
 /* optional instructions automatically implemented */
 #define TCG_TARGET_HAS_neg_i32          0 /* sub r1, r0, r3 */
@@ -140,7 +142,6 @@ typedef enum {
 #define TCG_TARGET_HAS_not_i32          0 /* xor r1, -1, r3 */
 #define TCG_TARGET_HAS_not_i64          0 /* xor r1, -1, r3 */
 
-/* Note: must be synced with dyngen-exec.h */
 #define TCG_AREG0 TCG_REG_R7
 
 /* Guest base is supported */

@@ -645,7 +645,7 @@ static int pmsav5_insn_ap_read(CPUARMState *env, const ARMCPRegInfo *ri,
 static int arm946_prbs_read(CPUARMState *env, const ARMCPRegInfo *ri,
                             uint64_t *value)
 {
-    if (ri->crm > 8) {
+    if (ri->crm >= 8) {
         return EXCP_UDEF;
     }
     *value = env->cp15.c6_region[ri->crm];
@@ -655,7 +655,7 @@ static int arm946_prbs_read(CPUARMState *env, const ARMCPRegInfo *ri,
 static int arm946_prbs_write(CPUARMState *env, const ARMCPRegInfo *ri,
                              uint64_t value)
 {
-    if (ri->crm > 8) {
+    if (ri->crm >= 8) {
         return EXCP_UDEF;
     }
     env->cp15.c6_region[ri->crm] = value;
@@ -1756,7 +1756,7 @@ static void do_interrupt_v7m(CPUARMState *env)
     case EXCP_BKPT:
         if (semihosting_enabled) {
             int nr;
-            nr = arm_lduw_code(env->regs[15], env->bswap_code) & 0xff;
+            nr = arm_lduw_code(env, env->regs[15], env->bswap_code) & 0xff;
             if (nr == 0xab) {
                 env->regs[15] += 2;
                 env->regs[0] = do_arm_semihosting(env);
@@ -1828,9 +1828,10 @@ void do_interrupt(CPUARMState *env)
         if (semihosting_enabled) {
             /* Check for semihosting interrupt.  */
             if (env->thumb) {
-                mask = arm_lduw_code(env->regs[15] - 2, env->bswap_code) & 0xff;
+                mask = arm_lduw_code(env, env->regs[15] - 2, env->bswap_code)
+                    & 0xff;
             } else {
-                mask = arm_ldl_code(env->regs[15] - 4, env->bswap_code)
+                mask = arm_ldl_code(env, env->regs[15] - 4, env->bswap_code)
                     & 0xffffff;
             }
             /* Only intercept calls from privileged modes, to provide some
@@ -1851,7 +1852,7 @@ void do_interrupt(CPUARMState *env)
     case EXCP_BKPT:
         /* See if this is a semihosting syscall.  */
         if (env->thumb && semihosting_enabled) {
-            mask = arm_lduw_code(env->regs[15], env->bswap_code) & 0xff;
+            mask = arm_lduw_code(env, env->regs[15], env->bswap_code) & 0xff;
             if (mask == 0xab
                   && (env->uncached_cpsr & CPSR_M) != ARM_CPU_MODE_USR) {
                 env->regs[15] += 2;

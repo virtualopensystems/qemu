@@ -89,7 +89,6 @@ static void tcg_out_st(TCGContext *s, TCGType type, TCGReg arg, TCGReg arg1,
                        tcg_target_long arg2);
 static int tcg_target_const_match(tcg_target_long val,
                                   const TCGArgConstraint *arg_ct);
-static int tcg_target_get_call_iarg_regs_count(int flags);
 
 TCGOpDef tcg_op_defs[] = {
 #define DEF(s, oargs, iargs, cargs, flags) { #s, oargs, iargs, cargs, iargs + oargs + cargs, flags },
@@ -298,6 +297,10 @@ void tcg_func_start(TCGContext *s)
     s->labels = tcg_malloc(sizeof(TCGLabel) * TCG_MAX_LABELS);
     s->nb_labels = 0;
     s->current_frame_offset = s->frame_start;
+
+#ifdef CONFIG_DEBUG_TCG
+    s->goto_tb_issue_mask = 0;
+#endif
 
     gen_opc_ptr = gen_opc_buf;
     gen_opparam_ptr = gen_opparam_buf;
@@ -937,11 +940,7 @@ void tcg_dump_ops(TCGContext *s)
                                                        args[nb_oargs + i]));
                 }
             }
-        } else if (c == INDEX_op_movi_i32 
-#if TCG_TARGET_REG_BITS == 64
-                   || c == INDEX_op_movi_i64
-#endif
-                   ) {
+        } else if (c == INDEX_op_movi_i32 || c == INDEX_op_movi_i64) {
             tcg_target_ulong val;
             TCGHelperInfo *th;
 
@@ -991,17 +990,13 @@ void tcg_dump_ops(TCGContext *s)
             }
             switch (c) {
             case INDEX_op_brcond_i32:
-#if TCG_TARGET_REG_BITS == 32
-            case INDEX_op_brcond2_i32:
-#elif TCG_TARGET_REG_BITS == 64
-            case INDEX_op_brcond_i64:
-#endif
             case INDEX_op_setcond_i32:
-#if TCG_TARGET_REG_BITS == 32
+            case INDEX_op_movcond_i32:
+            case INDEX_op_brcond2_i32:
             case INDEX_op_setcond2_i32:
-#elif TCG_TARGET_REG_BITS == 64
+            case INDEX_op_brcond_i64:
             case INDEX_op_setcond_i64:
-#endif
+            case INDEX_op_movcond_i64:
                 if (args[k] < ARRAY_SIZE(cond_name) && cond_name[args[k]]) {
                     qemu_log(",%s", cond_name[args[k++]]);
                 } else {
@@ -1297,11 +1292,6 @@ static void tcg_liveness_analysis(TCGContext *s)
                 args--;
             }
             break;
-        case INDEX_op_set_label:
-            args--;
-            /* mark end of basic block */
-            tcg_la_bb_end(s, dead_temps);
-            break;
         case INDEX_op_debug_insn_start:
             args -= def->nb_args;
             break;
@@ -1463,7 +1453,8 @@ static void temp_allocate_frame(TCGContext *s, int temp)
 {
     TCGTemp *ts;
     ts = &s->temps[temp];
-#ifndef __sparc_v9__ /* Sparc64 stack is accessed with offset of 2047 */
+#if !(defined(__sparc__) && TCG_TARGET_REG_BITS == 64)
+    /* Sparc64 stack is accessed with offset of 2047 */
     s->current_frame_offset = (s->current_frame_offset +
                                (tcg_target_long)sizeof(tcg_target_long) - 1) &
         ~(sizeof(tcg_target_long) - 1);
@@ -1866,7 +1857,7 @@ static int tcg_reg_alloc_call(TCGContext *s, const TCGOpDef *def,
 
     flags = args[nb_oargs + nb_iargs];
 
-    nb_regs = tcg_target_get_call_iarg_regs_count(flags);
+    nb_regs = ARRAY_SIZE(tcg_target_call_iarg_regs);
     if (nb_regs > nb_params)
         nb_regs = nb_params;
 
@@ -2059,22 +2050,29 @@ static inline int tcg_gen_code_common(TCGContext *s, uint8_t *gen_code_buf,
     }
 #endif
 
+#ifdef CONFIG_PROFILER
+    s->opt_time -= profile_getclock();
+#endif
+
 #ifdef USE_TCG_OPTIMIZATIONS
     gen_opparam_ptr =
         tcg_optimize(s, gen_opc_ptr, gen_opparam_buf, tcg_op_defs);
 #endif
 
 #ifdef CONFIG_PROFILER
+    s->opt_time += profile_getclock();
     s->la_time -= profile_getclock();
 #endif
+
     tcg_liveness_analysis(s);
+
 #ifdef CONFIG_PROFILER
     s->la_time += profile_getclock();
 #endif
 
 #ifdef DEBUG_DISAS
     if (unlikely(qemu_loglevel_mask(CPU_LOG_TB_OP_OPT))) {
-        qemu_log("OP after liveness analysis:\n");
+        qemu_log("OP after optimization and liveness analysis:\n");
         tcg_dump_ops(s);
         qemu_log("\n");
     }
@@ -2101,16 +2099,12 @@ static inline int tcg_gen_code_common(TCGContext *s, uint8_t *gen_code_buf,
 #endif
         switch(opc) {
         case INDEX_op_mov_i32:
-#if TCG_TARGET_REG_BITS == 64
         case INDEX_op_mov_i64:
-#endif
             dead_args = s->op_dead_args[op_index];
             tcg_reg_alloc_mov(s, def, args, dead_args);
             break;
         case INDEX_op_movi_i32:
-#if TCG_TARGET_REG_BITS == 64
         case INDEX_op_movi_i64:
-#endif
             tcg_reg_alloc_movi(s, args);
             break;
         case INDEX_op_debug_insn_start:
@@ -2241,6 +2235,9 @@ void tcg_dump_info(FILE *f, fprintf_function cpu_fprintf)
                 (double)s->interm_time / tot * 100.0);
     cpu_fprintf(f, "  gen_code time     %0.1f%%\n", 
                 (double)s->code_time / tot * 100.0);
+    cpu_fprintf(f, "optim./code time    %0.1f%%\n",
+                (double)s->opt_time / (s->code_time ? s->code_time : 1)
+                * 100.0);
     cpu_fprintf(f, "liveness/code time  %0.1f%%\n", 
                 (double)s->la_time / (s->code_time ? s->code_time : 1) * 100.0);
     cpu_fprintf(f, "cpu_restore count   %" PRId64 "\n",

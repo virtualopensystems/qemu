@@ -1355,6 +1355,8 @@ static int powerdown_requested;
 static int debug_requested;
 static int suspend_requested;
 static int wakeup_requested;
+static NotifierList powerdown_notifiers =
+    NOTIFIER_LIST_INITIALIZER(powerdown_notifiers);
 static NotifierList suspend_notifiers =
     NOTIFIER_LIST_INITIALIZER(suspend_notifiers);
 static NotifierList wakeup_notifiers =
@@ -1563,10 +1565,21 @@ void qemu_system_shutdown_request(void)
     qemu_notify_event();
 }
 
+static void qemu_system_powerdown(void)
+{
+    monitor_protocol_event(QEVENT_POWERDOWN, NULL);
+    notifier_list_notify(&powerdown_notifiers, NULL);
+}
+
 void qemu_system_powerdown_request(void)
 {
     powerdown_requested = 1;
     qemu_notify_event();
+}
+
+void qemu_register_powerdown_notifier(Notifier *notifier)
+{
+    notifier_list_add(&powerdown_notifiers, notifier);
 }
 
 void qemu_system_debug_request(void)
@@ -1580,8 +1593,6 @@ void qemu_system_vmstop_request(RunState state)
     vmstop_requested = state;
     qemu_notify_event();
 }
-
-qemu_irq qemu_system_powerdown;
 
 static bool main_loop_should_exit(void)
 {
@@ -1619,8 +1630,7 @@ static bool main_loop_should_exit(void)
         monitor_protocol_event(QEVENT_WAKEUP, NULL);
     }
     if (qemu_powerdown_requested()) {
-        monitor_protocol_event(QEVENT_POWERDOWN, NULL);
-        qemu_irq_raise(qemu_system_powerdown);
+        qemu_system_powerdown();
     }
     if (qemu_vmstop_requested(&r)) {
         vm_stop(r);
@@ -2622,7 +2632,8 @@ int main(int argc, char **argv, char **envp)
                 {
                     static const char * const params[] = {
                         "order", "once", "menu",
-                        "splash", "splash-time", NULL
+                        "splash", "splash-time",
+                        "reboot-timeout", NULL
                     };
                     char buf[sizeof(boot_devices)];
                     char *standard_boot_devices;
@@ -3657,7 +3668,9 @@ int main(int argc, char **argv, char **envp)
         break;
 #if defined(CONFIG_CURSES)
     case DT_CURSES:
-        curses_display_init(ds, full_screen);
+        if (!is_daemonized()) {
+            curses_display_init(ds, full_screen);
+        }
         break;
 #endif
 #if defined(CONFIG_SDL)

@@ -38,10 +38,10 @@ struct CPUMIPSTLBContext {
     uint32_t nb_tlb;
     uint32_t tlb_in_use;
     int (*map_address) (struct CPUMIPSState *env, target_phys_addr_t *physical, int *prot, target_ulong address, int rw, int access_type);
-    void (*helper_tlbwi) (void);
-    void (*helper_tlbwr) (void);
-    void (*helper_tlbp) (void);
-    void (*helper_tlbr) (void);
+    void (*helper_tlbwi)(struct CPUMIPSState *env);
+    void (*helper_tlbwr)(struct CPUMIPSState *env);
+    void (*helper_tlbp)(struct CPUMIPSState *env);
+    void (*helper_tlbr)(struct CPUMIPSState *env);
     union {
         struct {
             r4k_tlb_t tlb[MIPS_TLB_MAX];
@@ -485,10 +485,10 @@ int fixed_mmu_map_address (CPUMIPSState *env, target_phys_addr_t *physical, int 
                            target_ulong address, int rw, int access_type);
 int r4k_map_address (CPUMIPSState *env, target_phys_addr_t *physical, int *prot,
                      target_ulong address, int rw, int access_type);
-void r4k_helper_tlbwi (void);
-void r4k_helper_tlbwr (void);
-void r4k_helper_tlbp (void);
-void r4k_helper_tlbr (void);
+void r4k_helper_tlbwi(CPUMIPSState *env);
+void r4k_helper_tlbwr(CPUMIPSState *env);
+void r4k_helper_tlbp(CPUMIPSState *env);
+void r4k_helper_tlbr(CPUMIPSState *env);
 
 void cpu_unassigned_access(CPUMIPSState *env, target_phys_addr_t addr,
                            int is_write, int is_exec, int unused, int size);
@@ -740,6 +740,55 @@ static inline void cpu_pc_from_tb(CPUMIPSState *env, TranslationBlock *tb)
     env->active_tc.PC = tb->pc;
     env->hflags &= ~MIPS_HFLAG_BMASK;
     env->hflags |= tb->flags & MIPS_HFLAG_BMASK;
+}
+
+static inline void compute_hflags(CPUMIPSState *env)
+{
+    env->hflags &= ~(MIPS_HFLAG_COP1X | MIPS_HFLAG_64 | MIPS_HFLAG_CP0 |
+                     MIPS_HFLAG_F64 | MIPS_HFLAG_FPU | MIPS_HFLAG_KSU |
+                     MIPS_HFLAG_UX);
+    if (!(env->CP0_Status & (1 << CP0St_EXL)) &&
+        !(env->CP0_Status & (1 << CP0St_ERL)) &&
+        !(env->hflags & MIPS_HFLAG_DM)) {
+        env->hflags |= (env->CP0_Status >> CP0St_KSU) & MIPS_HFLAG_KSU;
+    }
+#if defined(TARGET_MIPS64)
+    if (((env->hflags & MIPS_HFLAG_KSU) != MIPS_HFLAG_UM) ||
+        (env->CP0_Status & (1 << CP0St_PX)) ||
+        (env->CP0_Status & (1 << CP0St_UX))) {
+        env->hflags |= MIPS_HFLAG_64;
+    }
+    if (env->CP0_Status & (1 << CP0St_UX)) {
+        env->hflags |= MIPS_HFLAG_UX;
+    }
+#endif
+    if ((env->CP0_Status & (1 << CP0St_CU0)) ||
+        !(env->hflags & MIPS_HFLAG_KSU)) {
+        env->hflags |= MIPS_HFLAG_CP0;
+    }
+    if (env->CP0_Status & (1 << CP0St_CU1)) {
+        env->hflags |= MIPS_HFLAG_FPU;
+    }
+    if (env->CP0_Status & (1 << CP0St_FR)) {
+        env->hflags |= MIPS_HFLAG_F64;
+    }
+    if (env->insn_flags & ISA_MIPS32R2) {
+        if (env->active_fpu.fcr0 & (1 << FCR0_F64)) {
+            env->hflags |= MIPS_HFLAG_COP1X;
+        }
+    } else if (env->insn_flags & ISA_MIPS32) {
+        if (env->hflags & MIPS_HFLAG_64) {
+            env->hflags |= MIPS_HFLAG_COP1X;
+        }
+    } else if (env->insn_flags & ISA_MIPS4) {
+        /* All supported MIPS IV CPUs use the XX (CU3) to enable
+           and disable the MIPS IV extensions to the MIPS III ISA.
+           Some other MIPS IV CPUs ignore the bit, so the check here
+           would be too restrictive for them.  */
+        if (env->CP0_Status & (1 << CP0St_CU3)) {
+            env->hflags |= MIPS_HFLAG_COP1X;
+        }
+    }
 }
 
 #endif /* !defined (__MIPS_CPU_H__) */

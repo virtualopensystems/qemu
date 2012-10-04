@@ -1114,14 +1114,12 @@ static int sd_open(BlockDriverState *bs, const char *filename, int flags)
         goto out;
     }
 
-    if (flags & BDRV_O_CACHE_WB) {
-        s->cache_enabled = 1;
-        s->flush_fd = connect_to_sdog(s->addr, s->port);
-        if (s->flush_fd < 0) {
-            error_report("failed to connect");
-            ret = s->flush_fd;
-            goto out;
-        }
+    s->cache_enabled = 1;
+    s->flush_fd = connect_to_sdog(s->addr, s->port);
+    if (s->flush_fd < 0) {
+        error_report("failed to connect");
+        ret = s->flush_fd;
+        goto out;
     }
 
     if (snapid || tag[0] != '\0') {
@@ -1986,7 +1984,7 @@ static int do_load_save_vmstate(BDRVSheepdogState *s, uint8_t *data,
         vdi_index = pos / SD_DATA_OBJ_SIZE;
         offset = pos % SD_DATA_OBJ_SIZE;
 
-        data_len = MIN(remaining, SD_DATA_OBJ_SIZE);
+        data_len = MIN(remaining, SD_DATA_OBJ_SIZE - offset);
 
         vmstate_oid = vid_to_vmstate_oid(s->inode.vdi_id, vdi_index);
 
@@ -2007,6 +2005,7 @@ static int do_load_save_vmstate(BDRVSheepdogState *s, uint8_t *data,
         }
 
         pos += data_len;
+        data += data_len;
         remaining -= data_len;
     }
     ret = size;
