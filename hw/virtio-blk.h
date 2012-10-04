@@ -14,7 +14,9 @@
 #ifndef _QEMU_VIRTIO_BLK_H
 #define _QEMU_VIRTIO_BLK_H
 
+#include "sysbus.h"
 #include "virtio.h"
+#include "virtio-transport.h"
 #include "hw/block-common.h"
 
 /* from Linux's linux/virtio_blk.h */
@@ -110,5 +112,18 @@ struct VirtIOBlkConf
 #define DEFINE_VIRTIO_BLK_FEATURES(_state, _field) \
         DEFINE_VIRTIO_COMMON_FEATURES(_state, _field), \
         DEFINE_PROP_BIT("config-wce", _state, _field, VIRTIO_BLK_F_CONFIG_WCE, true)
+
+
+typedef struct {
+    DeviceState qdev;
+    /* virtio-blk */
+    VirtIOBlkConf blk;
+
+    uint32_t host_features;
+
+    VirtIOTransportLink *trl;
+} VirtIOBlockState;
+
+#define VIRTIO_BLK_FROM_QDEV(dev) DO_UPCAST(VirtIOBlockState, qdev, dev)
 
 #endif
