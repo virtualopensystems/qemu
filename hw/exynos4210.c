@@ -26,6 +26,7 @@
 #include "sysbus.h"
 #include "arm-misc.h"
 #include "loader.h"
+#include "virtio-transport.h"
 #include "exynos4210.h"
 
 #define EXYNOS4210_CHIPID_ADDR         0x10000000
@@ -71,6 +72,10 @@
 
 /* Display controllers (FIMD) */
 #define EXYNOS4210_FIMD0_BASE_ADDR          0x11C00000
+
+/* VirtIO MMIO */
+#define EXYNOS4210_VIRTIO_MMIO0_BASE_ADDR   0x10AD0000
+#define EXYNOS4210_VIRTIO_MMIO1_BASE_ADDR   0x10AC0000
 
 static uint8_t chipid_and_omr[] = { 0x11, 0x02, 0x21, 0x43,
                                     0x09, 0x00, 0x00, 0x00 };
@@ -333,6 +338,14 @@ Exynos4210State *exynos4210_init(MemoryRegion *system_mem,
             s->irq_table[exynos4210_get_irq(11, 1)],
             s->irq_table[exynos4210_get_irq(11, 2)],
             NULL);
+
+    sysbus_create_simple(VIRTIO_MMIO,
+                         EXYNOS4210_VIRTIO_MMIO0_BASE_ADDR,
+                         s->irq_table[exynos4210_get_irq(37, 3)]);
+
+    sysbus_create_simple(VIRTIO_MMIO,
+                         EXYNOS4210_VIRTIO_MMIO1_BASE_ADDR,
+                         s->irq_table[exynos4210_get_irq(37, 2)]);
 
     return s;
 }
