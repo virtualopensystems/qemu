@@ -15,8 +15,10 @@
 #ifndef _QEMU_VIRTIO_BALLOON_H
 #define _QEMU_VIRTIO_BALLOON_H
 
+#include "sysbus.h"
 #include "virtio.h"
 #include "pci.h"
+#include "virtio-transport.h"
 
 /* from Linux's linux/virtio_balloon.h */
 
@@ -51,5 +53,12 @@ typedef struct VirtIOBalloonStat {
     uint16_t tag;
     uint64_t val;
 } QEMU_PACKED VirtIOBalloonStat;
+
+typedef struct {
+    DeviceState qdev;
+    VirtIOTransportLink *trl;
+} VirtIOBaloonState;
+
+#define VIRTIO_BALLOON_FROM_QDEV(dev) DO_UPCAST(VirtIOBaloonState, qdev, dev)
 
 #endif
