@@ -77,7 +77,6 @@ static const TypeInfo pci_bus_info = {
 static PCIBus *pci_find_bus_nr(PCIBus *bus, int bus_num);
 static void pci_update_mappings(PCIDevice *d);
 static void pci_set_irq(void *opaque, int irq_num, int level);
-static int pci_add_option_rom(PCIDevice *pdev, bool is_default_rom);
 static void pci_del_option_rom(PCIDevice *pdev);
 
 static uint16_t pci_default_sub_vendor_id = PCI_SUBVENDOR_ID_REDHAT_QUMRANET;
@@ -1733,7 +1732,7 @@ static void pci_patch_ids(PCIDevice *pdev, uint8_t *ptr, int size)
 }
 
 /* Add an option rom for the device */
-static int pci_add_option_rom(PCIDevice *pdev, bool is_default_rom)
+int pci_add_option_rom(PCIDevice *pdev, bool is_default_rom)
 {
     int size;
     char *path;
