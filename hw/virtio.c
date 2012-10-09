@@ -19,7 +19,9 @@
 #include "qemu-barrier.h"
 
 /* The alignment to use between consumer and producer parts of vring.
- * x86 pagesize again. */
+ * x86 pagesize again. This is the default, used by transports like PCI
+ * which don't provide a means for the guest to tell the host the alignment.
+ */
 #define VIRTIO_PCI_VRING_ALIGN         4096
 
 typedef struct VRingDesc
@@ -53,6 +55,7 @@ typedef struct VRingUsed
 typedef struct VRing
 {
     unsigned int num;
+    unsigned int align;
     target_phys_addr_t desc;
     target_phys_addr_t avail;
     target_phys_addr_t used;
@@ -90,7 +93,7 @@ static void virtqueue_init(VirtQueue *vq)
     vq->vring.avail = pa + vq->vring.num * sizeof(VRingDesc);
     vq->vring.used = vring_align(vq->vring.avail +
                                  offsetof(VRingAvail, ring[vq->vring.num]),
-                                 VIRTIO_PCI_VRING_ALIGN);
+                                 vq->vring.align);
 }
 
 static inline uint64_t vring_desc_addr(target_phys_addr_t desc_pa, int i)
@@ -646,6 +649,12 @@ int virtio_queue_get_id(VirtQueue *vq)
     return vq - &vdev->vq[0];
 }
 
+void virtio_queue_set_align(VirtIODevice *vdev, int n, int align)
+{
+    vdev->vq[n].vring.align = align;
+    virtqueue_init(&vdev->vq[n]);
+}
+
 void virtio_queue_notify_vq(VirtQueue *vq)
 {
     if (vq->vring.desc) {
@@ -686,6 +695,7 @@ VirtQueue *virtio_add_queue(VirtIODevice *vdev, int queue_size,
         abort();
 
     vdev->vq[i].vring.num = queue_size;
+    vdev->vq[i].vring.align = VIRTIO_PCI_VRING_ALIGN;
     vdev->vq[i].handle_output = handle_output;
 
     return &vdev->vq[i];
