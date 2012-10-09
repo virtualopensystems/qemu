@@ -2,6 +2,7 @@
 #include "qdev.h"
 #include "qerror.h"
 #include "blockdev.h"
+#include "virtio-transport.h"
 #include "hw/block-common.h"
 #include "net/hub.h"
 
@@ -524,6 +525,34 @@ PropertyInfo qdev_prop_drive = {
     .get   = get_drive,
     .set   = set_drive,
     .release = release_drive,
+};
+
+/* --- virtio transport --- */
+
+static int parse_transport(DeviceState *dev, const char *str, void **ptr)
+{
+    VirtIOTransportLink *trl;
+
+    trl = virtio_find_transport(str);
+
+    if (trl == NULL) {
+        return -ENOENT;
+    }
+
+    *ptr = trl;
+
+    return 0;
+}
+
+static void set_transport(Object *obj, Visitor *v, void *opaque,
+                      const char *name, Error **errp)
+{
+    set_pointer(obj, v, opaque, parse_transport, name, errp);
+}
+
+PropertyInfo qdev_prop_transport = {
+    .name  = "transport",
+    .set   = set_transport,
 };
 
 /* --- character device --- */
