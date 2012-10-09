@@ -526,7 +526,7 @@ static int kvm_virtio_pci_vq_vector_use(VirtIOPCI *s,
     }
     irqfd->users++;
 
-    ret = kvm_irqchip_add_irqfd_notifier(kvm_state, n, irqfd->virq);
+    ret = kvm_irqchip_add_irq_notifier(kvm_state, n, irqfd->virq);
     if (ret < 0) {
         if (--irqfd->users == 0) {
             kvm_irqchip_release_virq(kvm_state, irqfd->virq);
@@ -547,7 +547,7 @@ static void kvm_virtio_pci_vq_vector_release(VirtIOPCI *s,
     VirtIOIRQFD *irqfd = &s->vector_irqfd[vector];
     int ret;
 
-    ret = kvm_irqchip_remove_irqfd_notifier(kvm_state, n, irqfd->virq);
+    ret = kvm_irqchip_remove_irq_notifier(kvm_state, n, irqfd->virq);
     assert(ret == 0);
 
     if (--irqfd->users == 0) {
