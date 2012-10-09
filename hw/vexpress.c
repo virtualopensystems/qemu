@@ -426,10 +426,14 @@ static void vexpress_common_init(const VEDBoardInfo *daughterboard,
     vmstate_register_ram_global(vram);
     memory_region_add_subregion(sysmem, map[VE_VIDEORAM], vram);
 
+    /* 0x4e000000 MMIO virtio transport */
+    sysbus_create_simple("virtio-mmio", 0x4e000000, pic[42]);
     /* 0x4e000000 LAN9118 Ethernet */
-    if (nd_table[0].used) {
-        lan9118_init(&nd_table[0], map[VE_ETHERNET], pic[15]);
-    }
+    /*
+     *  if (nd_table[0].used) {
+     *    lan9118_init(&nd_table[0], map[VE_ETHERNET], pic[15]);
+     *  }
+     */
 
     /* VE_USB: not modelled */
 
