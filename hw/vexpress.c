@@ -428,6 +428,11 @@ static void vexpress_common_init(const VEDBoardInfo *daughterboard,
 
     /* 0x4e000000 MMIO virtio transport */
     sysbus_create_simple("virtio-mmio", 0x4e000000, pic[42]);
+    sysbus_create_simple("virtio-mmio", 0x4e100000, pic[43]);
+    sysbus_create_simple("virtio-mmio", 0x4e200000, pic[44]);
+    sysbus_create_simple("virtio-mmio", 0x4e300000, pic[45]);
+    sysbus_create_simple("virtio-mmio", 0x4e400000, pic[46]);
+
     /* 0x4e000000 LAN9118 Ethernet */
     /*
      *  if (nd_table[0].used) {
