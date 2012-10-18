@@ -20,6 +20,7 @@
 
 #include "sysbus.h"
 #include "kvm.h"
+#include "kvm_arm.h"
 
 /* A15MP private memory region.  */
 
@@ -87,7 +88,14 @@ static int a15mp_priv_init(SysBusDevice *dev)
                                 sysbus_mmio_get_region(busdev, 0));
     memory_region_add_subregion(&s->container, 0x2000,
                                 sysbus_mmio_get_region(busdev, 1));
-
+#ifdef CONFIG_KVM
+    kvm_arm_register_device(sysbus_mmio_get_region(busdev, 0),
+                            (KVM_ARM_DEVICE_VGIC_V2 << KVM_DEVICE_ID_SHIFT) |
+                            KVM_VGIC_V2_ADDR_TYPE_DIST);
+    kvm_arm_register_device(sysbus_mmio_get_region(busdev, 1),
+                            (KVM_ARM_DEVICE_VGIC_V2 << KVM_DEVICE_ID_SHIFT) |
+                            KVM_VGIC_V2_ADDR_TYPE_CPU);
+#endif
     sysbus_init_mmio(dev, &s->container);
     return 0;
 }

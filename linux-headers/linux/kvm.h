@@ -626,7 +626,7 @@ struct kvm_ppc_smmu_info {
 #ifdef __KVM_HAVE_READONLY_MEM
 #define KVM_CAP_READONLY_MEM 81
 #endif
-#define KVM_CAP_SET_DEVICE_ADDR 83
+#define KVM_CAP_SET_DEVICE_ADDR 82
 
 #ifdef KVM_CAP_IRQ_ROUTING
 
