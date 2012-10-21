@@ -115,7 +115,7 @@ struct kvm_irq_level {
 	 * ACPI gsi notion of irq.
 	 * For IA-64 (APIC model) IOAPIC0: irq 0-23; IOAPIC1: irq 24-47..
 	 * For X86 (standard AT mode) PIC0/1: irq 0-15. IOAPIC0: 0-23..
-	 * For ARM: IRQ: irq = (2*vcpu_index). FIQ: irq = (2*vcpu_indx + 1).
+	 * For ARM: See Documentation/virtual/kvm/api.txt
 	 */
 	union {
 		__u32 irq;
@@ -626,7 +626,9 @@ struct kvm_ppc_smmu_info {
 #ifdef __KVM_HAVE_READONLY_MEM
 #define KVM_CAP_READONLY_MEM 81
 #endif
-#define KVM_CAP_SET_DEVICE_ADDR 82
+#define KVM_CAP_IRQFD_RESAMPLE 82
+#define KVM_CAP_PPC_BOOKE_WATCHDOG 83
+#define KVM_CAP_SET_DEVICE_ADDR 84
 
 #ifdef KVM_CAP_IRQ_ROUTING
 
@@ -747,6 +749,11 @@ struct kvm_dirty_tlb {
 #define KVM_REG_SIZE_U512	0x0060000000000000ULL
 #define KVM_REG_SIZE_U1024	0x0070000000000000ULL
 
+struct kvm_reg_list {
+	__u64 n; /* number of regs */
+	__u64 reg[0];
+};
+
 struct kvm_one_reg {
 	__u64 id;
 	__u64 addr;
@@ -845,8 +852,11 @@ struct kvm_s390_ucas_mapping {
 #define KVM_PPC_GET_SMMU_INFO	  _IOR(KVMIO,  0xa6, struct kvm_ppc_smmu_info)
 /* Available with KVM_CAP_PPC_ALLOC_HTAB */
 #define KVM_PPC_ALLOCATE_HTAB	  _IOWR(KVMIO, 0xa7, __u32)
+#define KVM_CREATE_SPAPR_TCE	  _IOW(KVMIO,  0xa8, struct kvm_create_spapr_tce)
+/* Available with KVM_CAP_RMA */
+#define KVM_ALLOCATE_RMA	  _IOR(KVMIO,  0xa9, struct kvm_allocate_rma)
 /* Available with KVM_CAP_SET_DEVICE_ADDR */
-#define KVM_SET_DEVICE_ADDRESS	  _IOW(KVMIO,  0xa8, struct kvm_device_address)
+#define KVM_SET_DEVICE_ADDRESS	  _IOW(KVMIO,  0xaa, struct kvm_device_address)
 
 /*
  * ioctls for vcpu fds
