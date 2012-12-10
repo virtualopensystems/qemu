@@ -26,14 +26,6 @@
 #endif
 #include "virtio-bus.h"
 
-/*
- * Moving to QOM later in this series.
- */
-static VirtIOBlock *to_virtio_blk(VirtIODevice *vdev)
-{
-    return (VirtIOBlock *)vdev;
-}
-
 typedef struct VirtIOBlockReq
 {
     VirtIOBlock *dev;
@@ -49,12 +41,13 @@ typedef struct VirtIOBlockReq
 static void virtio_blk_req_complete(VirtIOBlockReq *req, int status)
 {
     VirtIOBlock *s = req->dev;
+    VirtIODevice *vdev = VIRTIO_DEVICE(s);
 
     trace_virtio_blk_req_complete(req, status);
 
     stb_p(&req->in->status, status);
     virtqueue_push(s->vq, &req->elem, req->qiov.size + sizeof(*req->in));
-    virtio_notify(&s->vdev, s->vq);
+    virtio_notify(vdev, s->vq);
 }
 
 static int virtio_blk_handle_rw_error(VirtIOBlockReq *req, int error,
@@ -399,7 +392,7 @@ static void virtio_blk_handle_request(VirtIOBlockReq *req,
 
 static void virtio_blk_handle_output(VirtIODevice *vdev, VirtQueue *vq)
 {
-    VirtIOBlock *s = to_virtio_blk(vdev);
+    VirtIOBlock *s = VIRTIO_BLK(vdev);
     VirtIOBlockReq *req;
     MultiReqBuffer mrb = {
         .num_writes = 0,
@@ -430,7 +423,7 @@ static void virtio_blk_handle_output(VirtIODevice *vdev, VirtQueue *vq)
 
 static void virtio_blk_dma_restart_bh(void *opaque)
 {
-    VirtIOBlock *s = opaque;
+    VirtIOBlock *s = VIRTIO_BLK(opaque);
     VirtIOBlockReq *req = s->rq;
     MultiReqBuffer mrb = {
         .num_writes = 0,
@@ -452,7 +445,7 @@ static void virtio_blk_dma_restart_bh(void *opaque)
 static void virtio_blk_dma_restart_cb(void *opaque, int running,
                                       RunState state)
 {
-    VirtIOBlock *s = opaque;
+    VirtIOBlock *s = VIRTIO_BLK(opaque);
 
     if (!running) {
         return;
@@ -485,7 +478,7 @@ static void virtio_blk_reset(VirtIODevice *vdev)
  */
 static void virtio_blk_update_config(VirtIODevice *vdev, uint8_t *config)
 {
-    VirtIOBlock *s = to_virtio_blk(vdev);
+    VirtIOBlock *s = VIRTIO_BLK(vdev);
     struct virtio_blk_config blkcfg;
     uint64_t capacity;
     int blk_size = s->conf->logical_block_size;
@@ -524,7 +517,7 @@ static void virtio_blk_update_config(VirtIODevice *vdev, uint8_t *config)
 
 static void virtio_blk_set_config(VirtIODevice *vdev, const uint8_t *config)
 {
-    VirtIOBlock *s = to_virtio_blk(vdev);
+    VirtIOBlock *s = VIRTIO_BLK(vdev);
     struct virtio_blk_config blkcfg;
 
     memcpy(&blkcfg, config, sizeof(blkcfg));
@@ -533,7 +526,7 @@ static void virtio_blk_set_config(VirtIODevice *vdev, const uint8_t *config)
 
 static uint32_t virtio_blk_get_features(VirtIODevice *vdev, uint32_t features)
 {
-    VirtIOBlock *s = to_virtio_blk(vdev);
+    VirtIOBlock *s = VIRTIO_BLK(vdev);
 
     features |= (1 << VIRTIO_BLK_F_SEG_MAX);
     features |= (1 << VIRTIO_BLK_F_GEOMETRY);
@@ -555,7 +548,7 @@ static uint32_t virtio_blk_get_features(VirtIODevice *vdev, uint32_t features)
 
 static void virtio_blk_set_status(VirtIODevice *vdev, uint8_t status)
 {
-    VirtIOBlock *s = to_virtio_blk(vdev);
+    VirtIOBlock *s = VIRTIO_BLK(vdev);
     uint32_t features;
 
 #ifdef CONFIG_VIRTIO_BLK_DATA_PLANE
@@ -575,10 +568,11 @@ static void virtio_blk_set_status(VirtIODevice *vdev, uint8_t status)
 
 static void virtio_blk_save(QEMUFile *f, void *opaque)
 {
-    VirtIOBlock *s = opaque;
+    VirtIOBlock *s = VIRTIO_BLK(opaque);
+    VirtIODevice *vdev = VIRTIO_DEVICE(s);
     VirtIOBlockReq *req = s->rq;
 
-    virtio_save(&s->vdev, f);
+    virtio_save(vdev, f);
     
     while (req) {
         qemu_put_sbyte(f, 1);
@@ -590,13 +584,14 @@ static void virtio_blk_save(QEMUFile *f, void *opaque)
 
 static int virtio_blk_load(QEMUFile *f, void *opaque, int version_id)
 {
-    VirtIOBlock *s = opaque;
+    VirtIOBlock *s = VIRTIO_BLK(opaque);
+    VirtIODevice *vdev = VIRTIO_DEVICE(s);
     int ret;
 
     if (version_id != 2)
         return -EINVAL;
 
-    ret = virtio_load(&s->vdev, f);
+    ret = virtio_load(vdev, f);
     if (ret) {
         return ret;
     }
@@ -618,9 +613,9 @@ static int virtio_blk_load(QEMUFile *f, void *opaque, int version_id)
 
 static void virtio_blk_resize(void *opaque)
 {
-    VirtIOBlock *s = opaque;
+    VirtIODevice *vdev = VIRTIO_DEVICE(opaque);
 
-    virtio_notify_config(&s->vdev);
+    virtio_notify_config(vdev);
 }
 
 static const BlockDevOps virtio_block_ops = {
@@ -633,101 +628,59 @@ void virtio_blk_set_conf(DeviceState *dev, VirtIOBlkConf *blk)
     memcpy(&(s->blk), blk, sizeof(struct VirtIOBlkConf));
 }
 
-static VirtIODevice *virtio_blk_common_init(DeviceState *dev,
-                                          VirtIOBlkConf *blk, VirtIOBlock **ps)
+static int virtio_blk_device_init(VirtIODevice *vdev)
 {
-    VirtIOBlock *s = *ps;
+    DeviceState *qdev = DEVICE(vdev);
+    VirtIOBlock *s = VIRTIO_BLK(vdev);
+    VirtIOBlkConf *blk = &(s->blk);
     static int virtio_blk_id;
 
     if (!blk->conf.bs) {
         error_report("drive property not set");
-        return NULL;
+        return -1;
     }
     if (!bdrv_is_inserted(blk->conf.bs)) {
         error_report("Device needs media, but drive is empty");
-        return NULL;
+        return -1;
     }
 
     blkconf_serial(&blk->conf, &blk->serial);
     if (blkconf_geometry(&blk->conf, NULL, 65535, 255, 255) < 0) {
-        return NULL;
+        return -1;
     }
 
-    /*
-     * We have two cases here: the old virtio-blk-pci device, and the
-     * refactored virtio-blk.
-     */
-    if (s == NULL) {
-        /* virtio-blk-pci */
-        s = (VirtIOBlock *)virtio_common_init("virtio-blk", VIRTIO_ID_BLOCK,
-                                              sizeof(struct virtio_blk_config),
-                                              sizeof(VirtIOBlock));
-    } else {
-        /* virtio-blk */
-        virtio_init(VIRTIO_DEVICE(s), "virtio-blk", VIRTIO_ID_BLOCK,
-                    sizeof(struct virtio_blk_config));
-    }
+    virtio_init(vdev, "virtio-blk", VIRTIO_ID_BLOCK,
+                sizeof(struct virtio_blk_config));
 
-    s->vdev.get_config = virtio_blk_update_config;
-    s->vdev.set_config = virtio_blk_set_config;
-    s->vdev.get_features = virtio_blk_get_features;
-    s->vdev.set_status = virtio_blk_set_status;
-    s->vdev.reset = virtio_blk_reset;
+    vdev->get_config = virtio_blk_update_config;
+    vdev->set_config = virtio_blk_set_config;
+    vdev->get_features = virtio_blk_get_features;
+    vdev->set_status = virtio_blk_set_status;
+    vdev->reset = virtio_blk_reset;
     s->bs = blk->conf.bs;
     s->conf = &blk->conf;
     memcpy(&(s->blk), blk, sizeof(struct VirtIOBlkConf));
     s->rq = NULL;
     s->sector_mask = (s->conf->logical_block_size / BDRV_SECTOR_SIZE) - 1;
 
-    s->vq = virtio_add_queue(&s->vdev, 128, virtio_blk_handle_output);
+    s->vq = virtio_add_queue(vdev, 128, virtio_blk_handle_output);
 #ifdef CONFIG_VIRTIO_BLK_DATA_PLANE
-    if (!virtio_blk_data_plane_create(&s->vdev, blk, &s->dataplane)) {
-        virtio_cleanup(&s->vdev);
-        return NULL;
+    if (!virtio_blk_data_plane_create(vdev, blk, &s->dataplane)) {
+        virtio_cleanup(vdev);
+        return -1;
     }
 #endif
 
     qemu_add_vm_change_state_handler(virtio_blk_dma_restart_cb, s);
-    s->qdev = dev;
-    register_savevm(dev, "virtio-blk", virtio_blk_id++, 2,
+    s->qdev = qdev;
+    register_savevm(qdev, "virtio-blk", virtio_blk_id++, 2,
                     virtio_blk_save, virtio_blk_load, s);
     bdrv_set_dev_ops(s->bs, &virtio_block_ops, s);
     bdrv_set_buffer_alignment(s->bs, s->conf->logical_block_size);
 
     bdrv_iostatus_enable(s->bs);
-    add_boot_device_path(s->conf->bootindex, dev, "/disk@0,0");
 
-    return &s->vdev;
-}
-
-VirtIODevice *virtio_blk_init(DeviceState *dev, VirtIOBlkConf *blk)
-{
-    VirtIOBlock *s = NULL;
-    return virtio_blk_common_init(dev, blk, &s);
-}
-
-void virtio_blk_exit(VirtIODevice *vdev)
-{
-    VirtIOBlock *s = to_virtio_blk(vdev);
-
-#ifdef CONFIG_VIRTIO_BLK_DATA_PLANE
-    virtio_blk_data_plane_destroy(s->dataplane);
-    s->dataplane = NULL;
-#endif
-    unregister_savevm(s->qdev, "virtio-blk", s);
-    blockdev_mark_auto_del(s->bs);
-    virtio_cleanup(vdev);
-}
-
-
-static int virtio_blk_device_init(VirtIODevice *vdev)
-{
-    DeviceState *qdev = DEVICE(vdev);
-    VirtIOBlock *s = VIRTIO_BLK(vdev);
-    VirtIOBlkConf *blk = &(s->blk);
-    if (virtio_blk_common_init(qdev, blk, &s) == NULL) {
-        return -1;
-    }
+    add_boot_device_path(s->conf->bootindex, qdev, "/disk@0,0");
     return 0;
 }
 
