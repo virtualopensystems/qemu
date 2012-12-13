@@ -672,7 +672,6 @@ static int virtio_blk_device_init(VirtIODevice *vdev)
 #endif
 
     qemu_add_vm_change_state_handler(virtio_blk_dma_restart_cb, s);
-    s->qdev = qdev;
     register_savevm(qdev, "virtio-blk", virtio_blk_id++, 2,
                     virtio_blk_save, virtio_blk_load, s);
     bdrv_set_dev_ops(s->bs, &virtio_block_ops, s);
@@ -692,7 +691,7 @@ static int virtio_blk_device_exit(DeviceState *dev)
     virtio_blk_data_plane_destroy(s->dataplane);
     s->dataplane = NULL;
 #endif
-    unregister_savevm(s->qdev, "virtio-blk", s);
+    unregister_savevm(dev, "virtio-blk", s);
     blockdev_mark_auto_del(s->bs);
     virtio_common_cleanup(vdev);
     return 0;
