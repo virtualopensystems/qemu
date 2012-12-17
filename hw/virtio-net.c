@@ -1068,7 +1068,6 @@ static int virtio_net_device_init(VirtIODevice *vdev)
 
     n->vlans = g_malloc0(MAX_VLAN >> 3);
 
-    n->qdev = qdev;
     register_savevm(qdev, "virtio-net", -1, VIRTIO_NET_VM_VERSION,
                     virtio_net_save, virtio_net_load, n);
 

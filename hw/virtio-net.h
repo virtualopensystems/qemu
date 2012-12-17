@@ -168,7 +168,6 @@ typedef struct VirtIONet {
     uint32_t *vlans;
     virtio_net_conf net_conf;
     NICConf nic_conf;
-    DeviceState *qdev;
 } VirtIONet;
 
 #define VIRTIO_NET_CTRL_MAC    1
