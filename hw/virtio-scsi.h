@@ -18,6 +18,11 @@
 #include "pci/pci.h"
 #include <hw/scsi.h>
 
+#define TYPE_VIRTIO_SCSI "virtio-scsi"
+#define VIRTIO_SCSI(obj) \
+        OBJECT_CHECK(VirtIOSCSI, (obj), TYPE_VIRTIO_SCSI)
+
+
 /* The ID for virtio_scsi */
 #define VIRTIO_ID_SCSI  8
 
@@ -51,5 +56,7 @@ typedef struct VirtIOSCSI {
     DEFINE_PROP_UINT32("num_queues", _state, _conf_field.num_queues, 1), \
     DEFINE_PROP_UINT32("max_sectors", _state, _conf_field.max_sectors, 0xFFFF),\
     DEFINE_PROP_UINT32("cmd_per_lun", _state, _conf_field.cmd_per_lun, 128)
+
+void virtio_scsi_set_conf(DeviceState *qdev, VirtIOSCSIConf *conf);
 
 #endif /* _QEMU_VIRTIO_SCSI_H */
