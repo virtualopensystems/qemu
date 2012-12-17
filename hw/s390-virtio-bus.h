@@ -91,7 +91,6 @@ struct VirtIOS390Device {
     VirtIODevice *vdev;
     uint32_t host_features;
     virtio_serial_conf serial;
-    VirtIOSCSIConf scsi;
     VirtIORNGConf rng;
     VirtioBusState bus;
 };
@@ -141,6 +140,18 @@ typedef struct VirtIONetS390 {
     virtio_net_conf net;
     NICConf nic;
 } VirtIONetS390;
+
+/* virtio-scsi-s390 */
+
+#define TYPE_VIRTIO_SCSI_S390 "virtio-scsi-s390"
+#define VIRTIO_SCSI_S390(obj) \
+        OBJECT_CHECK(VirtIOSCSIS390, (obj), TYPE_VIRTIO_SCSI_S390)
+
+typedef struct VirtIOSCSIS390 {
+    VirtIOS390Device parent_obj;
+    VirtIOSCSI vdev;
+    VirtIOSCSIConf scsi;
+} VirtIOSCSIS390;
 
 
 #endif
