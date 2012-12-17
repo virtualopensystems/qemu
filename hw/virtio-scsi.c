@@ -689,12 +689,12 @@ VirtIODevice *virtio_scsi_init(DeviceState *dev, VirtIOSCSIConf *proxyconf)
 {
     VirtIOSCSI *s;
     static int virtio_scsi_id;
-    size_t sz;
     int i;
 
-    sz = sizeof(VirtIOSCSI) + proxyconf->num_queues * sizeof(VirtQueue *);
     s = (VirtIOSCSI *)virtio_common_init("virtio-scsi", VIRTIO_ID_SCSI,
-                                         sizeof(VirtIOSCSIConfig), sz);
+                                         sizeof(VirtIOSCSIConfig),
+                                         sizeof(VirtIOSCSI));
+    s->cmd_vqs = g_malloc0(proxyconf->num_queues * sizeof(VirtQueue *));
 
     s->qdev = dev;
     memcpy(&(s->conf), proxyconf, sizeof(struct VirtIOSCSIConf));
