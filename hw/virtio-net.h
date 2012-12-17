@@ -130,7 +130,7 @@ struct virtio_net_ctrl_mac {
 };
 
 typedef struct VirtIONet {
-    VirtIODevice vdev;
+    VirtIODevice parent_obj;
     uint8_t mac[ETH_ALEN];
     uint16_t status;
     VirtQueue *rx_vq;
