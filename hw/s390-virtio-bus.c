@@ -543,7 +543,12 @@ static const TypeInfo virtio_s390_device_info = {
 };
 
 static Property s390_virtio_scsi_properties[] = {
-    DEFINE_VIRTIO_SCSI_PROPERTIES(VirtIOS390Device, host_features, scsi),
+    DEFINE_VIRTIO_SCSI_PROPERTIES(VirtIOS390Device, scsi),
+    DEFINE_VIRTIO_COMMON_FEATURES(VirtIOS390Device, host_features),
+    DEFINE_PROP_BIT("hotplug", VirtIOS390Device, host_features,
+                    VIRTIO_SCSI_F_HOTPLUG, true),
+    DEFINE_PROP_BIT("param_change", VirtIOS390Device, host_features,
+                    VIRTIO_SCSI_F_CHANGE, true),
     DEFINE_PROP_END_OF_LIST(),
 };
 
