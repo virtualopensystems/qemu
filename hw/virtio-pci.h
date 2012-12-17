@@ -73,13 +73,13 @@ struct VirtIOPCIProxy {
     uint32_t flags;
     uint32_t class_code;
     uint32_t nvectors;
-    NICConf nic;
+    NICConf nic_conf;
     uint32_t host_features;
 #ifdef CONFIG_LINUX
     V9fsConf fsconf;
 #endif
     virtio_serial_conf serial;
-    virtio_net_conf net;
+    virtio_net_conf net_conf;
     VirtIOSCSIConf scsi;
     VirtIORNGConf rng;
     bool ioeventfd_disabled;
