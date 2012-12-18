@@ -229,16 +229,25 @@ static void s390_virtio_scsi_instance_init(Object *obj)
     object_property_add_child(obj, "virtio-backend", OBJECT(&dev->vdev), NULL);
 }
 
-static int s390_virtio_rng_init(VirtIOS390Device *dev)
+static int s390_virtio_rng_init(VirtIOS390Device *s390_dev)
 {
-    VirtIODevice *vdev;
-
-    vdev = virtio_rng_init((DeviceState *)dev, &dev->rng);
-    if (!vdev) {
+    VirtIORNGS390 *dev = VIRTIO_RNG_S390(s390_dev);
+    DeviceState *vdev = DEVICE(&dev->vdev);
+    virtio_rng_set_conf(vdev, &(dev->rng));
+    qdev_set_parent_bus(vdev, BUS(&s390_dev->bus));
+    if (qdev_init(vdev) < 0) {
         return -1;
     }
+    return s390_virtio_device_init(s390_dev, VIRTIO_DEVICE(vdev));
+}
 
-    return s390_virtio_device_init(dev, vdev);
+static void s390_virtio_rng_instance_init(Object *obj)
+{
+    VirtIORNGS390 *dev = VIRTIO_RNG_S390(obj);
+    object_initialize(OBJECT(&dev->vdev), TYPE_VIRTIO_RNG);
+    object_property_add_child(obj, "virtio-backend", OBJECT(&dev->vdev), NULL);
+    object_property_add_link(obj, "rng", TYPE_RNG_BACKEND,
+                             (Object **)&dev->rng.rng, NULL);
 }
 
 static uint64_t s390_virtio_device_vq_token(VirtIOS390Device *dev, int vq)
@@ -498,14 +507,6 @@ static const TypeInfo s390_virtio_serial = {
     .class_init    = s390_virtio_serial_class_init,
 };
 
-static void s390_virtio_rng_initfn(Object *obj)
-{
-    VirtIOS390Device *dev = VIRTIO_S390_DEVICE(obj);
-
-    object_property_add_link(obj, "rng", TYPE_RNG_BACKEND,
-                             (Object **)&dev->rng.rng, NULL);
-}
-
 static void s390_virtio_rng_class_init(ObjectClass *klass, void *data)
 {
     VirtIOS390DeviceClass *k = VIRTIO_S390_DEVICE_CLASS(klass);
@@ -514,10 +515,10 @@ static void s390_virtio_rng_class_init(ObjectClass *klass, void *data)
 }
 
 static const TypeInfo s390_virtio_rng = {
-    .name          = "virtio-rng-s390",
+    .name          = TYPE_VIRTIO_RNG_S390,
     .parent        = TYPE_VIRTIO_S390_DEVICE,
-    .instance_size = sizeof(VirtIOS390Device),
-    .instance_init = s390_virtio_rng_initfn,
+    .instance_size = sizeof(VirtIORNGS390),
+    .instance_init = s390_virtio_rng_instance_init,
     .class_init    = s390_virtio_rng_class_init,
 };
 
