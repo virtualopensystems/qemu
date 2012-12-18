@@ -245,7 +245,6 @@ static int virtio_balloon_device_init(VirtIODevice *vdev)
 
     reset_stats(s);
 
-    s->qdev = qdev;
     register_savevm(qdev, "virtio-balloon", -1, 1,
                     virtio_balloon_save, virtio_balloon_load, s);
 
