@@ -964,41 +964,6 @@ static void virtio_serial_exit_pci(PCIDevice *pci_dev)
     virtio_exit_pci(pci_dev);
 }
 
-static int virtio_rng_init_pci(PCIDevice *pci_dev)
-{
-    VirtIOPCIProxy *proxy = DO_UPCAST(VirtIOPCIProxy, pci_dev, pci_dev);
-    VirtIODevice *vdev;
-
-    if (proxy->rng.rng == NULL) {
-        proxy->rng.default_backend = RNG_RANDOM(object_new(TYPE_RNG_RANDOM));
-
-        object_property_add_child(OBJECT(pci_dev),
-                                  "default-backend",
-                                  OBJECT(proxy->rng.default_backend),
-                                  NULL);
-
-        object_property_set_link(OBJECT(pci_dev),
-                                 OBJECT(proxy->rng.default_backend),
-                                 "rng", NULL);
-    }
-
-    vdev = virtio_rng_init(&pci_dev->qdev, &proxy->rng);
-    if (!vdev) {
-        return -1;
-    }
-    virtio_init_pci(proxy, vdev);
-    return 0;
-}
-
-static void virtio_rng_exit_pci(PCIDevice *pci_dev)
-{
-    VirtIOPCIProxy *proxy = DO_UPCAST(VirtIOPCIProxy, pci_dev, pci_dev);
-
-    virtio_pci_stop_ioeventfd(proxy);
-    virtio_rng_exit(proxy->vdev);
-    virtio_exit_pci(pci_dev);
-}
-
 static Property virtio_serial_properties[] = {
     DEFINE_PROP_BIT("ioeventfd", VirtIOPCIProxy, flags, VIRTIO_PCI_FLAG_USE_IOEVENTFD_BIT, true),
     DEFINE_PROP_UINT32("vectors", VirtIOPCIProxy, nvectors, DEV_NVECTORS_UNSPECIFIED),
@@ -1028,44 +993,6 @@ static const TypeInfo virtio_serial_info = {
     .parent        = TYPE_PCI_DEVICE,
     .instance_size = sizeof(VirtIOPCIProxy),
     .class_init    = virtio_serial_class_init,
-};
-
-static void virtio_rng_initfn(Object *obj)
-{
-    PCIDevice *pci_dev = PCI_DEVICE(obj);
-    VirtIOPCIProxy *proxy = DO_UPCAST(VirtIOPCIProxy, pci_dev, pci_dev);
-
-    object_property_add_link(obj, "rng", TYPE_RNG_BACKEND,
-                             (Object **)&proxy->rng.rng, NULL);
-}
-
-static Property virtio_rng_properties[] = {
-    DEFINE_VIRTIO_COMMON_FEATURES(VirtIOPCIProxy, host_features),
-    DEFINE_VIRTIO_RNG_PROPERTIES(VirtIOPCIProxy, rng),
-    DEFINE_PROP_END_OF_LIST(),
-};
-
-static void virtio_rng_class_init(ObjectClass *klass, void *data)
-{
-    DeviceClass *dc = DEVICE_CLASS(klass);
-    PCIDeviceClass *k = PCI_DEVICE_CLASS(klass);
-
-    k->init = virtio_rng_init_pci;
-    k->exit = virtio_rng_exit_pci;
-    k->vendor_id = PCI_VENDOR_ID_REDHAT_QUMRANET;
-    k->device_id = PCI_DEVICE_ID_VIRTIO_RNG;
-    k->revision = VIRTIO_PCI_ABI_VERSION;
-    k->class_id = PCI_CLASS_OTHERS;
-    dc->reset = virtio_pci_reset;
-    dc->props = virtio_rng_properties;
-}
-
-static const TypeInfo virtio_rng_info = {
-    .name          = "virtio-rng-pci",
-    .parent        = TYPE_PCI_DEVICE,
-    .instance_size = sizeof(VirtIOPCIProxy),
-    .instance_init = virtio_rng_initfn,
-    .class_init    = virtio_rng_class_init,
 };
 
 /*
@@ -1402,6 +1329,73 @@ static const TypeInfo virtio_balloon_pci_info = {
     .instance_size = sizeof(VirtIOBalloonPCI),
     .instance_init = virtio_balloon_pci_instance_init,
     .class_init    = virtio_balloon_pci_class_init,
+};
+
+/* virtio-rng-pci */
+
+static Property virtio_rng_pci_properties[] = {
+    DEFINE_VIRTIO_COMMON_FEATURES(VirtIOPCIProxy, host_features),
+    DEFINE_VIRTIO_RNG_PROPERTIES(VirtIORngPCI, conf),
+    DEFINE_PROP_END_OF_LIST(),
+};
+
+static int virtio_rng_pci_init(VirtIOPCIProxy *vpci_dev)
+{
+    VirtIORngPCI *vrng = VIRTIO_RNG_PCI(vpci_dev);
+    DeviceState *vdev = DEVICE(&vrng->vdev);
+
+    if (vrng->conf.rng == NULL) {
+        vrng->conf.default_backend = RNG_RANDOM(object_new(TYPE_RNG_RANDOM));
+
+        object_property_add_child(OBJECT(vrng),
+                                  "default-backend",
+                                  OBJECT(vrng->conf.default_backend),
+                                  NULL);
+
+        object_property_set_link(OBJECT(vrng),
+                                 OBJECT(vrng->conf.default_backend),
+                                 "rng", NULL);
+    }
+
+    virtio_rng_set_conf(vdev, &(vrng->conf));
+    qdev_set_parent_bus(vdev, BUS(&vpci_dev->bus));
+    if (qdev_init(vdev) < 0) {
+        return -1;
+    }
+    return 0;
+}
+
+static void virtio_rng_pci_class_init(ObjectClass *klass, void *data)
+{
+    DeviceClass *dc = DEVICE_CLASS(klass);
+    VirtioPCIClass *k = VIRTIO_PCI_CLASS(klass);
+    PCIDeviceClass *pcidev_k = PCI_DEVICE_CLASS(klass);
+
+    k->init = virtio_rng_pci_init;
+    dc->props = virtio_rng_pci_properties;
+
+    pcidev_k->vendor_id = PCI_VENDOR_ID_REDHAT_QUMRANET;
+    pcidev_k->device_id = PCI_DEVICE_ID_VIRTIO_RNG;
+    pcidev_k->revision = VIRTIO_PCI_ABI_VERSION;
+    pcidev_k->class_id = PCI_CLASS_OTHERS;
+}
+
+static void virtio_rng_initfn(Object *obj)
+{
+    VirtIORngPCI *dev = VIRTIO_RNG_PCI(obj);
+    object_initialize(OBJECT(&dev->vdev), TYPE_VIRTIO_RNG);
+    object_property_add_child(obj, "virtio-backend", OBJECT(&dev->vdev), NULL);
+    object_property_add_link(obj, "rng", TYPE_RNG_BACKEND,
+                             (Object **)&dev->conf.rng, NULL);
+
+}
+
+static const TypeInfo virtio_rng_info = {
+    .name          = TYPE_VIRTIO_RNG_PCI,
+    .parent        = TYPE_VIRTIO_PCI,
+    .instance_size = sizeof(VirtIORngPCI),
+    .instance_init = virtio_rng_initfn,
+    .class_init    = virtio_rng_pci_class_init,
 };
 
 /* virtio-pci-bus */
