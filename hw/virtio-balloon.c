@@ -29,14 +29,6 @@
 
 #include "virtio-bus.h"
 
-/*
- * Will be modified later in the serie.
- */
-static VirtIOBalloon *to_virtio_balloon(VirtIODevice *vdev)
-{
-    return (VirtIOBalloon *)vdev;
-}
-
 static void balloon_page(void *addr, int deflate)
 {
 #if defined(__linux__)
@@ -62,7 +54,7 @@ static inline void reset_stats(VirtIOBalloon *dev)
 
 static void virtio_balloon_handle_output(VirtIODevice *vdev, VirtQueue *vq)
 {
-    VirtIOBalloon *s = to_virtio_balloon(vdev);
+    VirtIOBalloon *s = VIRTIO_BALLOON(vdev);
     VirtQueueElement elem;
     MemoryRegionSection section;
 
@@ -96,7 +88,7 @@ static void virtio_balloon_handle_output(VirtIODevice *vdev, VirtQueue *vq)
 
 static void virtio_balloon_receive_stats(VirtIODevice *vdev, VirtQueue *vq)
 {
-    VirtIOBalloon *s = DO_UPCAST(VirtIOBalloon, vdev, vdev);
+    VirtIOBalloon *s = VIRTIO_BALLOON(vdev);
     VirtQueueElement *elem = &s->stats_vq_elem;
     VirtIOBalloonStat stat;
     size_t offset = 0;
@@ -125,7 +117,7 @@ static void virtio_balloon_receive_stats(VirtIODevice *vdev, VirtQueue *vq)
 
 static void virtio_balloon_get_config(VirtIODevice *vdev, uint8_t *config_data)
 {
-    VirtIOBalloon *dev = to_virtio_balloon(vdev);
+    VirtIOBalloon *dev = VIRTIO_BALLOON(vdev);
     struct virtio_balloon_config config;
 
     config.num_pages = cpu_to_le32(dev->num_pages);
@@ -137,7 +129,7 @@ static void virtio_balloon_get_config(VirtIODevice *vdev, uint8_t *config_data)
 static void virtio_balloon_set_config(VirtIODevice *vdev,
                                       const uint8_t *config_data)
 {
-    VirtIOBalloon *dev = to_virtio_balloon(vdev);
+    VirtIOBalloon *dev = VIRTIO_BALLOON(vdev);
     struct virtio_balloon_config config;
     uint32_t oldactual = dev->actual;
     memcpy(&config, config_data, 8);
@@ -156,7 +148,7 @@ static uint32_t virtio_balloon_get_features(VirtIODevice *vdev, uint32_t f)
 
 static void virtio_balloon_stat(void *opaque, BalloonInfo *info)
 {
-    VirtIOBalloon *dev = opaque;
+    VirtIOBalloon *dev = VIRTIO_BALLOON(opaque);
 
 #if 0
     /* Disable guest-provided stats for now. For more details please check:
@@ -185,22 +177,24 @@ static void virtio_balloon_stat(void *opaque, BalloonInfo *info)
 
 static void virtio_balloon_to_target(void *opaque, ram_addr_t target)
 {
-    VirtIOBalloon *dev = opaque;
+    VirtIOBalloon *dev = VIRTIO_BALLOON(opaque);
+    VirtIODevice *vdev = VIRTIO_DEVICE(dev);
 
     if (target > ram_size) {
         target = ram_size;
     }
     if (target) {
         dev->num_pages = (ram_size - target) >> VIRTIO_BALLOON_PFN_SHIFT;
-        virtio_notify_config(&dev->vdev);
+        virtio_notify_config(vdev);
     }
 }
 
 static void virtio_balloon_save(QEMUFile *f, void *opaque)
 {
-    VirtIOBalloon *s = opaque;
+    VirtIOBalloon *s = VIRTIO_BALLOON(opaque);
+    VirtIODevice *vdev = VIRTIO_DEVICE(s);
 
-    virtio_save(&s->vdev, f);
+    virtio_save(vdev, f);
 
     qemu_put_be32(f, s->num_pages);
     qemu_put_be32(f, s->actual);
@@ -208,13 +202,14 @@ static void virtio_balloon_save(QEMUFile *f, void *opaque)
 
 static int virtio_balloon_load(QEMUFile *f, void *opaque, int version_id)
 {
-    VirtIOBalloon *s = opaque;
+    VirtIOBalloon *s = VIRTIO_BALLOON(opaque);
+    VirtIODevice *vdev = VIRTIO_DEVICE(s);
     int ret;
 
     if (version_id != 1)
         return -EINVAL;
 
-    ret = virtio_load(&s->vdev, f);
+    ret = virtio_load(vdev, f);
     if (ret) {
         return ret;
     }
@@ -232,9 +227,9 @@ static int virtio_balloon_device_init(VirtIODevice *vdev)
 
     virtio_init(vdev, "virtio-balloon", VIRTIO_ID_BALLOON, 8);
 
-    s->vdev.get_config = virtio_balloon_get_config;
-    s->vdev.set_config = virtio_balloon_set_config;
-    s->vdev.get_features = virtio_balloon_get_features;
+    vdev->get_config = virtio_balloon_get_config;
+    vdev->set_config = virtio_balloon_set_config;
+    vdev->get_features = virtio_balloon_get_features;
 
     ret = qemu_add_balloon_handler(virtio_balloon_to_target,
                                    virtio_balloon_stat, s);
