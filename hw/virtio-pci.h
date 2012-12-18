@@ -21,12 +21,14 @@
 #include "virtio-rng.h"
 #include "virtio-serial.h"
 #include "virtio-scsi.h"
+#include "virtio-balloon.h"
 #include "virtio-bus.h"
 
 typedef struct VirtIOPCIProxy VirtIOPCIProxy;
 typedef struct VirtIOBlkPCI VirtIOBlkPCI;
 typedef struct VirtIONetPCI VirtIONetPCI;
 typedef struct VirtIOSCSIPCI VirtIOSCSIPCI;
+typedef struct VirtIOBalloonPCI VirtIOBalloonPCI;
 
 /* virtio-pci-bus */
 
@@ -126,6 +128,18 @@ struct VirtIOSCSIPCI {
     VirtIOPCIProxy parent_obj;
     VirtIOSCSI vdev;
     VirtIOSCSIConf conf;
+};
+
+/*
+ * virtio-balloon-pci: This extends VirtioPCIProxy.
+ */
+#define TYPE_VIRTIO_BALLOON_PCI "virtio-balloon-pci"
+#define VIRTIO_BALLOON_PCI(obj) \
+        OBJECT_CHECK(VirtIOBalloonPCI, (obj), TYPE_VIRTIO_BALLOON_PCI)
+
+struct VirtIOBalloonPCI {
+    VirtIOPCIProxy parent_obj;
+    VirtIOBalloon vdev;
 };
 
 void virtio_init_pci(VirtIOPCIProxy *proxy, VirtIODevice *vdev);
