@@ -11,6 +11,7 @@
 #include "fsdev/virtio-9p-marshal.h"
 #include "qemu/thread.h"
 #include "block/coroutine.h"
+#include "hw/virtio-pci.h"
 
 
 /* The feature bitmap for virtio 9P */
@@ -412,5 +413,18 @@ extern int v9fs_name_to_path(V9fsState *s, V9fsPath *dirpath,
         DEFINE_PROP_STRING("fsdev", _state, _field.fsdev_id)
 
 void virtio_9p_set_conf(DeviceState *dev, V9fsConf *conf);
+
+/*
+ * virtio-9p-pci: This extends VirtioPCIProxy.
+ */
+#define TYPE_VIRTIO_9P_PCI "virtio-9p-pci"
+#define VIRTIO_9P_PCI(obj) \
+        OBJECT_CHECK(V9fsPCIState, (obj), TYPE_VIRTIO_9P_PCI)
+
+typedef struct V9fsPCIState {
+    VirtIOPCIProxy parent_obj;
+    V9fsState vdev;
+    V9fsConf fsconf;
+} V9fsPCIState;
 
 #endif

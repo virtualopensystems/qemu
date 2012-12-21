@@ -80,9 +80,6 @@ struct VirtIOPCIProxy {
     uint32_t class_code;
     uint32_t nvectors;
     uint32_t host_features;
-#ifdef CONFIG_LINUX
-    V9fsConf fsconf;
-#endif
     bool ioeventfd_disabled;
     bool ioeventfd_started;
     VirtIOIRQFD *vector_irqfd;
