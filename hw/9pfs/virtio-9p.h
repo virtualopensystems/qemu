@@ -207,7 +207,7 @@ struct V9fsFidState
 
 typedef struct V9fsState
 {
-    VirtIODevice vdev;
+    VirtIODevice parent_obj;
     VirtQueue *vq;
     V9fsPDU pdus[MAX_REQ];
     QLIST_HEAD(, V9fsPDU) free_list;
