@@ -202,8 +202,6 @@ struct VirtIOSerial {
 
     VirtIOSerialBus bus;
 
-    DeviceState *qdev;
-
     QTAILQ_HEAD(, VirtIOSerialPort) ports;
 
     /* bitmap for identifying active ports */
