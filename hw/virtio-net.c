@@ -26,47 +26,6 @@
 #define MAC_TABLE_ENTRIES    64
 #define MAX_VLAN    (1 << 12)   /* Per 802.1Q definition */
 
-typedef struct VirtIONet
-{
-    VirtIODevice vdev;
-    uint8_t mac[ETH_ALEN];
-    uint16_t status;
-    VirtQueue *rx_vq;
-    VirtQueue *tx_vq;
-    VirtQueue *ctrl_vq;
-    NICState *nic;
-    QEMUTimer *tx_timer;
-    QEMUBH *tx_bh;
-    uint32_t tx_timeout;
-    int32_t tx_burst;
-    int tx_waiting;
-    uint32_t has_vnet_hdr;
-    size_t host_hdr_len;
-    size_t guest_hdr_len;
-    uint8_t has_ufo;
-    struct {
-        VirtQueueElement elem;
-        ssize_t len;
-    } async_tx;
-    int mergeable_rx_bufs;
-    uint8_t promisc;
-    uint8_t allmulti;
-    uint8_t alluni;
-    uint8_t nomulti;
-    uint8_t nouni;
-    uint8_t nobcast;
-    uint8_t vhost_started;
-    struct {
-        int in_use;
-        int first_multi;
-        uint8_t multi_overflow;
-        uint8_t uni_overflow;
-        uint8_t *macs;
-    } mac_table;
-    uint32_t *vlans;
-    DeviceState *qdev;
-} VirtIONet;
-
 /* TODO
  * - we could suppress RX interrupt if we were so inclined.
  */

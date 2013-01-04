@@ -25,22 +25,6 @@
 # include <scsi/sg.h>
 #endif
 
-typedef struct VirtIOBlock
-{
-    VirtIODevice vdev;
-    BlockDriverState *bs;
-    VirtQueue *vq;
-    void *rq;
-    QEMUBH *bh;
-    BlockConf *conf;
-    VirtIOBlkConf *blk;
-    unsigned short sector_mask;
-    DeviceState *qdev;
-#ifdef CONFIG_VIRTIO_BLK_DATA_PLANE
-    VirtIOBlockDataPlane *dataplane;
-#endif
-} VirtIOBlock;
-
 static VirtIOBlock *to_virtio_blk(VirtIODevice *vdev)
 {
     return (VirtIOBlock *)vdev;
