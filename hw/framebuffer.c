@@ -89,7 +89,8 @@ void framebuffer_update_display(
     for (; i < rows; i++) {
         dirty = memory_region_get_dirty(mem, addr, src_width,
                                              DIRTY_MEMORY_VGA);
-        if (dirty || invalidate) {
+	(void)dirty, (void)invalidate;
+	if (1) {
             fn(opaque, dest, src, cols, dest_col_pitch);
             if (first == -1)
                 first = i;
