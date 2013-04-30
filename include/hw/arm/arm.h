@@ -31,6 +31,10 @@ struct arm_boot_info {
     const char *kernel_cmdline;
     const char *initrd_filename;
     const char *dtb_filename;
+    /* if a board is able to create a dtb without a dtb file then it
+     * sets get_dtb.  This will only be used if no dtb file is provided.
+     */
+    void *(*get_dtb)(hwaddr addr, const struct arm_boot_info *binfo, int *size);
     hwaddr loader_start;
     /* multicore boards that use the default secondary core boot functions
      * need to put the address of the secondary boot code, the boot reg,
@@ -59,6 +63,8 @@ struct arm_boot_info {
     int is_linux;
     hwaddr initrd_start;
     hwaddr initrd_size;
+    void *dtb_blob;
+    int dtb_blob_size;
     hwaddr entry;
 };
 void arm_load_kernel(ARMCPU *cpu, struct arm_boot_info *info);
