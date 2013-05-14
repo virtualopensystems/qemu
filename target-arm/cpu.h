@@ -290,7 +290,11 @@ int cpu_arm_handle_mmu_fault (CPUARMState *env, target_ulong address, int rw,
 
 static inline void cpu_set_tls(CPUARMState *env, target_ulong newtls)
 {
-  env->cp15.c13_tls2 = newtls;
+    if (is_a64(env)) {
+        env->sr.tpidr_el0 = newtls;
+    } else {
+        env->cp15.c13_tls2 = newtls;
+    }
 }
 
 #define CPSR_M (0x1f)
@@ -696,9 +700,17 @@ static inline int cpu_mmu_index (CPUARMState *env)
 #if defined(CONFIG_USER_ONLY)
 static inline void cpu_clone_regs(CPUARMState *env, target_ulong newsp)
 {
-    if (newsp)
-        env->regs[13] = newsp;
-    env->regs[0] = 0;
+    if (is_a64(env)) {
+        if (newsp) {
+            env->xregs[31] = newsp;
+        }
+        env->xregs[0] = 0;
+    } else {
+        if (newsp) {
+            env->regs[13] = newsp;
+        }
+        env->regs[0] = 0;
+    }
 }
 #endif
 

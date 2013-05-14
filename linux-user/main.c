@@ -3890,6 +3890,15 @@ int main(int argc, char **argv, char **envp)
     cpu_x86_load_seg(env, R_FS, 0);
     cpu_x86_load_seg(env, R_GS, 0);
 #endif
+#elif defined(TARGET_AARCH64)
+    {
+        int i;
+        for(i = 0; i < 31; i++) {
+            env->xregs[i] = regs->regs[i];
+        }
+        env->pc = regs->pc;
+        env->xregs[31] = regs->sp;
+    }
 #elif defined(TARGET_ARM)
     {
         int i;
