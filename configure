@@ -4168,6 +4168,14 @@ case "$target_name" in
     target_nptl="yes"
     gdb_xml_files="arm-core.xml arm-vfp.xml arm-vfp3.xml arm-neon.xml"
   ;;
+  aarch64)
+    TARGET_BASE_ARCH=arm
+    TARGET_ABI_DIR=aarch64
+    bflt="yes"
+    target_nptl="yes"
+    gdb_xml_files="aarch64-core.xml aarch64-fpu.xml"
+    target_long_alignment=8
+  ;;
   cris)
     target_nptl="yes"
   ;;
