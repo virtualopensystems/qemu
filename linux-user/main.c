@@ -700,7 +700,9 @@ void cpu_loop(CPUARMState *env)
 {
     CPUState *cs = CPU(arm_env_get_cpu(env));
     int trapnr;
+#ifndef TARGET_AARCH64
     unsigned int n, insn;
+#endif
     target_siginfo_t info;
     uint32_t addr;
 
@@ -783,6 +785,18 @@ void cpu_loop(CPUARMState *env)
         case EXCP_SWI:
         case EXCP_BKPT:
             {
+#ifdef TARGET_AARCH64
+                env->xregs[0] = do_syscall(env,
+                                           env->xregs[8],
+                                           env->xregs[0],
+                                           env->xregs[1],
+                                           env->xregs[2],
+                                           env->xregs[3],
+                                           env->xregs[4],
+                                           env->xregs[5],
+                                           0, 0);
+#else
+
                 env->eabi = 1;
                 /* system call */
                 if (trapnr == EXCP_BKPT) {
@@ -853,6 +867,7 @@ void cpu_loop(CPUARMState *env)
                 } else {
                     goto error;
                 }
+#endif
             }
             break;
         case EXCP_INTERRUPT:
