@@ -19,13 +19,19 @@
 #ifndef CPU_ARM_H
 #define CPU_ARM_H
 
-#define TARGET_LONG_BITS 32
+#include "config.h"
 
-#define ELF_MACHINE	EM_ARM
+#if defined(TARGET_AARCH64)
+  /* AArch64 definitions */
+#  define TARGET_LONG_BITS 64
+#  define ELF_MACHINE EM_AARCH64
+#else
+#  define TARGET_LONG_BITS 32
+#  define ELF_MACHINE EM_ARM
+#endif
 
 #define CPUArchState struct CPUARMState
 
-#include "config.h"
 #include "qemu-common.h"
 #include "exec/cpu-defs.h"
 
@@ -79,6 +85,16 @@ struct arm_boot_info;
 typedef struct CPUARMState {
     /* Regs for current mode.  */
     uint32_t regs[16];
+
+    /* 32/64 switch only happens when taking and returning from
+     * exceptions so the overlap semantics is taken care of then
+     * instead of having a complicated union. */
+    /* Regs for A64 mode.  */
+    uint64_t xregs[32];
+    uint64_t pc;
+    uint32_t pstate;
+    uint32_t aarch64; /* 1 if CPU is in aarch64 state */
+
     /* Frequently accessed CPSR bits are stored separately for efficiency.
        This contains all the other bits.  Use cpsr_{read,write} to access
        the whole CPSR.  */
@@ -154,6 +170,11 @@ typedef struct CPUARMState {
         uint32_t c15_power_control; /* power control */
     } cp15;
 
+    /* System registers (AArch64) */
+    struct {
+        uint64_t tpidr_el0;
+    } sr;
+
     struct {
         uint32_t other_sp;
         uint32_t vecbase;
@@ -170,7 +191,7 @@ typedef struct CPUARMState {
 
     /* VFP coprocessor state.  */
     struct {
-        float64 regs[32];
+        float64 regs[64];
 
         uint32_t xregs[16];
         /* We store these fpcsr fields separately for convenience.  */
@@ -239,6 +260,24 @@ int cpu_arm_exec(CPUARMState *s);
 int bank_number(int mode);
 void switch_mode(CPUARMState *, int);
 uint32_t do_arm_semihosting(CPUARMState *env);
+
+static inline bool is_a64(CPUARMState *env)
+{
+#ifdef TARGET_AARCH64
+    return env->aarch64;
+#else
+    return false;
+#endif
+}
+
+#define PSTATE_N_SHIFT 3
+#define PSTATE_N  (1 << PSTATE_N_SHIFT)
+#define PSTATE_Z_SHIFT 2
+#define PSTATE_Z  (1 << PSTATE_Z_SHIFT)
+#define PSTATE_C_SHIFT 1
+#define PSTATE_C  (1 << PSTATE_C_SHIFT)
+#define PSTATE_V_SHIFT 0
+#define PSTATE_V  (1 << PSTATE_V_SHIFT)
 
 /* you can call this signal handler from your SIGBUS and SIGSEGV
    signal handlers to inform the virtual CPU of exceptions. non zero
@@ -623,8 +662,13 @@ static inline bool cp_access_ok(CPUARMState *env,
 #define TARGET_PAGE_BITS 10
 #endif
 
-#define TARGET_PHYS_ADDR_SPACE_BITS 40
-#define TARGET_VIRT_ADDR_SPACE_BITS 32
+#if defined(TARGET_AARCH64)
+#  define TARGET_PHYS_ADDR_SPACE_BITS 64
+#  define TARGET_VIRT_ADDR_SPACE_BITS 64
+#else
+#  define TARGET_PHYS_ADDR_SPACE_BITS 40
+#  define TARGET_VIRT_ADDR_SPACE_BITS 32
+#endif
 
 static inline CPUARMState *cpu_init(const char *cpu_model)
 {
@@ -661,21 +705,23 @@ static inline void cpu_clone_regs(CPUARMState *env, target_ulong newsp)
 #include "exec/cpu-all.h"
 
 /* Bit usage in the TB flags field: */
-#define ARM_TBFLAG_THUMB_SHIFT      0
-#define ARM_TBFLAG_THUMB_MASK       (1 << ARM_TBFLAG_THUMB_SHIFT)
-#define ARM_TBFLAG_VECLEN_SHIFT     1
-#define ARM_TBFLAG_VECLEN_MASK      (0x7 << ARM_TBFLAG_VECLEN_SHIFT)
-#define ARM_TBFLAG_VECSTRIDE_SHIFT  4
-#define ARM_TBFLAG_VECSTRIDE_MASK   (0x3 << ARM_TBFLAG_VECSTRIDE_SHIFT)
-#define ARM_TBFLAG_PRIV_SHIFT       6
-#define ARM_TBFLAG_PRIV_MASK        (1 << ARM_TBFLAG_PRIV_SHIFT)
-#define ARM_TBFLAG_VFPEN_SHIFT      7
-#define ARM_TBFLAG_VFPEN_MASK       (1 << ARM_TBFLAG_VFPEN_SHIFT)
-#define ARM_TBFLAG_CONDEXEC_SHIFT   8
-#define ARM_TBFLAG_CONDEXEC_MASK    (0xff << ARM_TBFLAG_CONDEXEC_SHIFT)
-#define ARM_TBFLAG_BSWAP_CODE_SHIFT 16
-#define ARM_TBFLAG_BSWAP_CODE_MASK  (1 << ARM_TBFLAG_BSWAP_CODE_SHIFT)
-/* Bits 31..17 are currently unused. */
+#define ARM_TBFLAG_THUMB_SHIFT         0
+#define ARM_TBFLAG_THUMB_MASK          (1 << ARM_TBFLAG_THUMB_SHIFT)
+#define ARM_TBFLAG_VECLEN_SHIFT        1
+#define ARM_TBFLAG_VECLEN_MASK         (0x7 << ARM_TBFLAG_VECLEN_SHIFT)
+#define ARM_TBFLAG_VECSTRIDE_SHIFT     4
+#define ARM_TBFLAG_VECSTRIDE_MASK      (0x3 << ARM_TBFLAG_VECSTRIDE_SHIFT)
+#define ARM_TBFLAG_PRIV_SHIFT          6
+#define ARM_TBFLAG_PRIV_MASK           (1 << ARM_TBFLAG_PRIV_SHIFT)
+#define ARM_TBFLAG_VFPEN_SHIFT         7
+#define ARM_TBFLAG_VFPEN_MASK          (1 << ARM_TBFLAG_VFPEN_SHIFT)
+#define ARM_TBFLAG_CONDEXEC_SHIFT      8
+#define ARM_TBFLAG_CONDEXEC_MASK       (0xff << ARM_TBFLAG_CONDEXEC_SHIFT)
+#define ARM_TBFLAG_BSWAP_CODE_SHIFT    16
+#define ARM_TBFLAG_BSWAP_CODE_MASK     (1 << ARM_TBFLAG_BSWAP_CODE_SHIFT)
+#define ARM_TBFLAG_AARCH64_STATE_SHIFT 17
+#define ARM_TBFLAG_AARCH64_STATE_MASK  (1 << ARM_TBFLAG_AARCH64_STATE_SHIFT)
+/* Bits 31..18 are currently unused. */
 
 /* some convenience accessor macros */
 #define ARM_TBFLAG_THUMB(F) \
@@ -692,29 +738,37 @@ static inline void cpu_clone_regs(CPUARMState *env, target_ulong newsp)
     (((F) & ARM_TBFLAG_CONDEXEC_MASK) >> ARM_TBFLAG_CONDEXEC_SHIFT)
 #define ARM_TBFLAG_BSWAP_CODE(F) \
     (((F) & ARM_TBFLAG_BSWAP_CODE_MASK) >> ARM_TBFLAG_BSWAP_CODE_SHIFT)
+#define ARM_TBFLAG_AARCH64_STATE(F) \
+    (((F) & ARM_TBFLAG_AARCH64_STATE_MASK) >> ARM_TBFLAG_AARCH64_STATE_SHIFT)
 
 static inline void cpu_get_tb_cpu_state(CPUARMState *env, target_ulong *pc,
                                         target_ulong *cs_base, int *flags)
 {
-    int privmode;
-    *pc = env->regs[15];
-    *cs_base = 0;
-    *flags = (env->thumb << ARM_TBFLAG_THUMB_SHIFT)
-        | (env->vfp.vec_len << ARM_TBFLAG_VECLEN_SHIFT)
-        | (env->vfp.vec_stride << ARM_TBFLAG_VECSTRIDE_SHIFT)
-        | (env->condexec_bits << ARM_TBFLAG_CONDEXEC_SHIFT)
-        | (env->bswap_code << ARM_TBFLAG_BSWAP_CODE_SHIFT);
-    if (arm_feature(env, ARM_FEATURE_M)) {
-        privmode = !((env->v7m.exception == 0) && (env->v7m.control & 1));
+    if (is_a64(env)) {
+        *pc = env->pc;
+        *flags = env->aarch64 << ARM_TBFLAG_AARCH64_STATE_SHIFT;
     } else {
-        privmode = (env->uncached_cpsr & CPSR_M) != ARM_CPU_MODE_USR;
+        int privmode;
+        *pc = env->regs[15];
+        *flags = (env->thumb << ARM_TBFLAG_THUMB_SHIFT)
+            | (env->vfp.vec_len << ARM_TBFLAG_VECLEN_SHIFT)
+            | (env->vfp.vec_stride << ARM_TBFLAG_VECSTRIDE_SHIFT)
+            | (env->condexec_bits << ARM_TBFLAG_CONDEXEC_SHIFT)
+            | (env->bswap_code << ARM_TBFLAG_BSWAP_CODE_SHIFT);
+        if (arm_feature(env, ARM_FEATURE_M)) {
+            privmode = !((env->v7m.exception == 0) && (env->v7m.control & 1));
+        } else {
+            privmode = (env->uncached_cpsr & CPSR_M) != ARM_CPU_MODE_USR;
+        }
+        if (privmode) {
+            *flags |= ARM_TBFLAG_PRIV_MASK;
+        }
+        if (env->vfp.xregs[ARM_VFP_FPEXC] & (1 << 30)) {
+            *flags |= ARM_TBFLAG_VFPEN_MASK;
+        }
     }
-    if (privmode) {
-        *flags |= ARM_TBFLAG_PRIV_MASK;
-    }
-    if (env->vfp.xregs[ARM_VFP_FPEXC] & (1 << 30)) {
-        *flags |= ARM_TBFLAG_VFPEN_MASK;
-    }
+
+    *cs_base = 0;
 }
 
 static inline bool cpu_has_work(CPUState *cpu)
@@ -727,11 +781,15 @@ static inline bool cpu_has_work(CPUState *cpu)
 
 static inline void cpu_pc_from_tb(CPUARMState *env, TranslationBlock *tb)
 {
-    env->regs[15] = tb->pc;
+    if (ARM_TBFLAG_AARCH64_STATE(tb->flags)) {
+        env->pc = tb->pc;
+    } else {
+        env->regs[15] = tb->pc;
+    }
 }
 
 /* Load an instruction and return it in the standard little-endian order */
-static inline uint32_t arm_ldl_code(CPUARMState *env, uint32_t addr,
+static inline uint32_t arm_ldl_code(CPUARMState *env, target_ulong addr,
                                     bool do_swap)
 {
     uint32_t insn = cpu_ldl_code(env, addr);
@@ -742,7 +800,7 @@ static inline uint32_t arm_ldl_code(CPUARMState *env, uint32_t addr,
 }
 
 /* Ditto, for a halfword (Thumb) instruction */
-static inline uint16_t arm_lduw_code(CPUARMState *env, uint32_t addr,
+static inline uint16_t arm_lduw_code(CPUARMState *env, target_ulong addr,
                                      bool do_swap)
 {
     uint16_t insn = cpu_lduw_code(env, addr);

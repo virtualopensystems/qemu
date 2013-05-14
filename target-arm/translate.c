@@ -9783,7 +9783,7 @@ static inline void gen_intermediate_code_internal(CPUARMState *env,
     uint16_t *gen_opc_end;
     int j, lj;
     target_ulong pc_start;
-    uint32_t next_page_start;
+    target_ulong next_page_start;
     int num_insns;
     int max_insns;
 
@@ -9871,7 +9871,7 @@ static inline void gen_intermediate_code_internal(CPUARMState *env,
         /* Intercept jump to the magic kernel page.  */
         if (dc->pc >= 0xffff0000) {
             /* We always get here via a jump, so know we are not in a
-               conditional execution block.  */
+                conditional execution block.  */
             gen_exception(EXCP_KERNEL_TRAP);
             dc->is_jmp = DISAS_UPDATE;
             break;
@@ -9879,7 +9879,7 @@ static inline void gen_intermediate_code_internal(CPUARMState *env,
 #else
         if (dc->pc >= 0xfffffff0 && IS_M(env)) {
             /* We always get here via a jump, so know we are not in a
-               conditional execution block.  */
+                conditional execution block.  */
             gen_exception(EXCP_EXCEPTION_EXIT);
             dc->is_jmp = DISAS_UPDATE;
             break;
@@ -9937,7 +9937,8 @@ static inline void gen_intermediate_code_internal(CPUARMState *env,
         }
 
         if (tcg_check_temp_count()) {
-            fprintf(stderr, "TCG temporary leak before %08x\n", dc->pc);
+            fprintf(stderr, "TCG temporary leak before "TARGET_FMT_lx"\n",
+                    dc->pc);
         }
 
         /* Translation stops when a conditional branch is encountered.
@@ -10107,6 +10108,10 @@ void cpu_dump_state(CPUARMState *env, FILE *f, fprintf_function cpu_fprintf,
 
 void restore_state_to_opc(CPUARMState *env, TranslationBlock *tb, int pc_pos)
 {
-    env->regs[15] = tcg_ctx.gen_opc_pc[pc_pos];
+    if (is_a64(env)) {
+        env->pc = tcg_ctx.gen_opc_pc[pc_pos];
+    } else {
+        env->regs[15] = tcg_ctx.gen_opc_pc[pc_pos];
+    }
     env->condexec_bits = gen_opc_condexec_bits[pc_pos];
 }

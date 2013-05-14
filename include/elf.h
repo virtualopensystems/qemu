@@ -109,6 +109,8 @@ typedef int64_t  Elf64_Sxword;
 #define EM_OPENRISC     92        /* OpenCores OpenRISC */
 
 #define EM_UNICORE32    110     /* UniCore32 */
+#define EM_AARCH64      183     /* ARM 64-bit architecture */
+
 
 /*
  * This is an interim value that we will use until the committee comes
