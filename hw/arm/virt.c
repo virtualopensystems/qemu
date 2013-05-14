@@ -51,9 +51,15 @@
 #define IO_BASE 0xfff00000
 #define IO_LEN 0x000f0000
 
+#if defined(TARGET_AARCH64)
+#define DEFAULT_CPU_MODEL "cortex-a57"
+#elif defined(TARGET_ARM)
+#define DEFAULT_CPU_MODEL "cortex-a15"
+#endif
+
 struct machine_info {
     const char cpu_model[CPU_NAME_MAX_LEN];
-    const char *cpu_compat;
+    const char *cpu_compatible;
     const char *qdevname;
     uint64_t mem_base;
     uint64_t max_mem;
@@ -72,9 +78,22 @@ struct machine_info {
 };
 
 static struct machine_info machines[] = {
+#if defined(TARGET_AARCH64)
+    {
+        .cpu_model = "cortex-a57",
+        .cpu_compatible = "arm,arm-v8",
+        .qdevname = "a57mpcore_priv",
+        .mem_base = MEM_BASE,
+        .max_mem = MAX_MEM,
+        .io_base = IO_BASE,
+        .io_len = IO_LEN,
+        .gic_info = {0x01000, 0x1000, 0x02000, 0x1000, 0x8000,
+		"arm,cortex-a15-gic"},
+    },
+#elif defined(TARGET_ARM)
     {
         .cpu_model = "cortex-a15",
-        .cpu_compat = "arm,cortex-a15",
+        .cpu_compatible = "arm,cortex-a15",
         .qdevname = "a15mpcore_priv",
         .mem_base = MEM_BASE,
         .max_mem = MAX_MEM,
@@ -85,7 +104,7 @@ static struct machine_info machines[] = {
     },
     {
         .cpu_model = "cortex-a9",
-        .cpu_compat = "arm,cortex-a9",
+        .cpu_compatible = "arm,cortex-a9",
         .qdevname = "a9mpcore_priv",
         .mem_base = MEM_BASE,
         .max_mem = MAX_MEM,
@@ -94,6 +113,7 @@ static struct machine_info machines[] = {
         .gic_info = {0x01000, 0x1000, 0x0100, 0x0100, 0x2000,
 		"arm,cortex-a9-gic"},
     },
+#endif
     {
         .cpu_model = "",
     },
@@ -103,7 +123,7 @@ static struct machine_info *find_machine_info(const char *cpu)
 {
     struct machine_info *mi = machines;
 
-    while (mi->cpu_model) {
+    while (mi->cpu_model[0]) {
         if (strncmp(cpu, mi->cpu_model, sizeof(mi->cpu_model)) == 0) {
             return mi;
         }
@@ -195,7 +215,7 @@ static void fdt_add_timer_nodes(void *fdt, int smp_cpus)
             sizeof(irq_prop));
 }
 
-static void fdt_add_cpu_nodes(void *fdt, int smp_cpus)
+static void fdt_add_cpu_nodes(void *fdt, struct machine_info *mi, int smp_cpus)
 {
     int cpu;
 
@@ -211,7 +231,7 @@ static void fdt_add_cpu_nodes(void *fdt, int smp_cpus)
         qemu_devtree_add_subnode(fdt, cpu_name);
         qemu_devtree_setprop_string(fdt, cpu_name, "device_type", "cpu");
         qemu_devtree_setprop_string(fdt, cpu_name, "compatible",
-            "arm,cortex-a15");
+            mi->cpu_compatible);
 
         if (smp_cpus > 1) {
             qemu_devtree_setprop_string(fdt, cpu_name, "enable-method", "psci");
@@ -345,13 +365,13 @@ static void machvirt_init(QEMUMachineInitArgs *args)
     struct machine_info *mi;
 
     if (!cpu_model) {
-        cpu_model = "cortex-a15";
+        cpu_model = DEFAULT_CPU_MODEL;
     }
 
     mi = find_machine_info(cpu_model);
 
     if (!mi) {
-        hw_error("No machine info for cpu%s\n", cpu_model);
+        hw_error("No machine info for cpu %s\n", cpu_model);
         exit(1);
     }
 
@@ -385,7 +405,7 @@ static void machvirt_init(QEMUMachineInitArgs *args)
         irqp = arm_pic_init_cpu(cpu);
         cpu_irq[n] = irqp[ARM_PIC_CPU_IRQ];
     }
-    fdt_add_cpu_nodes(virt_fdt, smp_cpus);
+    fdt_add_cpu_nodes(virt_fdt, mi, smp_cpus);
 
     memory_region_init_ram(ram, "mach-virt.ram", ram_size);
     vmstate_register_ram_global(ram);
