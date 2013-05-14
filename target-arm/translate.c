@@ -112,6 +112,10 @@ void arm_translate_init(void)
         offsetof(CPUARMState, exclusive_info), "exclusive_info");
 #endif
 
+#ifdef TARGET_AARCH64
+    a64_translate_init();
+#endif
+
 #define GEN_HELPER 2
 #include "helper.h"
 }
@@ -10069,6 +10073,11 @@ void cpu_dump_state(CPUARMState *env, FILE *f, fprintf_function cpu_fprintf,
 {
     int i;
     uint32_t psr;
+
+    if (is_a64(env)) {
+        cpu_dump_state_a64(env, f, cpu_fprintf, flags);
+        return;
+    }
 
     for(i=0;i<16;i++) {
         cpu_fprintf(f, "R%02d=%08x", i, env->regs[i]);

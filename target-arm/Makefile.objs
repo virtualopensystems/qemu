@@ -3,3 +3,4 @@ obj-$(CONFIG_SOFTMMU) += machine.o
 obj-$(CONFIG_KVM) += kvm.o
 obj-y += translate.o op_helper.o helper.o cpu.o
 obj-y += neon_helper.o iwmmxt_helper.o
+obj-$(TARGET_AARCH64) += translate-a64.o
