@@ -23,7 +23,11 @@ typedef struct target_sigaltstack {
 
 static inline abi_ulong get_sp_from_cpustate(CPUARMState *state)
 {
+#ifdef TARGET_AARCH64
+   return state->sp;
+#else
    return state->regs[13];
+#endif
 }
 
 #endif /* TARGET_SIGNAL_H */
