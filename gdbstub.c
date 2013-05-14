@@ -940,6 +940,59 @@ static int cpu_gdb_write_register(CPUSPARCState *env, uint8_t *mem_buf, int n)
     return 8;
 #endif
 }
+#elif defined(TARGET_AARCH64)
+
+#define NUM_CORE_REGS 34
+#define GDB_CORE_XML "aarch64-core.xml"
+
+static int cpu_gdb_read_register(CPUARMState *env, uint8_t *mem_buf, int n)
+{
+    if (n < 31) {
+        /* Core integer register.  */
+        GET_REG64(env->xregs[n]);
+    }
+    switch (n) {
+    case 31:
+        GET_REG64(env->xregs[31]);
+        break;
+    case 32:
+        GET_REG64(env->pc);
+        break;
+    case 33:
+        GET_REG32(env->pstate);
+        break;
+    }
+    /* Unknown register.  */
+    return 0;
+}
+
+static int cpu_gdb_write_register(CPUARMState *env, uint8_t *mem_buf, int n)
+{
+    uint64_t tmp;
+
+    tmp = ldq_p(mem_buf);
+
+    if (n < 31) {
+        /* Core integer register.  */
+        env->xregs[n] = tmp;
+        return 8;
+    }
+    switch (n) {
+    case 31:
+        env->xregs[31] = tmp;
+        return 8;
+    case 32:
+        env->pc = tmp;
+        return 8;
+    case 33:
+        /* CPSR */
+        env->pstate = tmp;
+        return 4;
+    }
+    /* Unknown register.  */
+    return 0;
+}
+
 #elif defined (TARGET_ARM)
 
 /* Old gdb always expect FPA registers.  Newer (xml-aware) gdb only expect
