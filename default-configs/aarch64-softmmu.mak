@@ -1,4 +1,4 @@
-# Default configuration for arm-softmmu
+# Default configuration for aarch64-softmmu
 
 include pci.mak
 include usb.mak
@@ -37,6 +37,7 @@ CONFIG_USB_MUSB=y
 CONFIG_ARM9MPCORE=y
 CONFIG_ARM11MPCORE=y
 CONFIG_ARM15MPCORE=y
+CONFIG_ARM57MPCORE=y
 
 CONFIG_ARM_GIC=y
 CONFIG_ARM_GIC_KVM=$(CONFIG_KVM)
