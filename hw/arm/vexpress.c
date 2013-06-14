@@ -393,6 +393,74 @@ static const VEDBoardInfo a15_daughterboard = {
     .init = a15_daughterboard_init,
 };
 
+static void a57_daughterboard_init(const VEDBoardInfo *daughterboard,
+                                   ram_addr_t ram_size,
+                                   const char *cpu_model,
+                                   qemu_irq *pic)
+{
+    int n;
+    MemoryRegion *sysmem = get_system_memory();
+    MemoryRegion *ram = g_new(MemoryRegion, 1);
+    qemu_irq cpu_irq[4];
+    DeviceState *dev;
+    SysBusDevice *busdev;
+
+    if (!cpu_model) {
+        cpu_model = "cortex-a57";
+    }
+
+    for (n = 0; n < smp_cpus; n++) {
+        ARMCPU *cpu;
+        qemu_irq *irqp;
+
+        cpu = cpu_arm_init(cpu_model);
+        if (!cpu) {
+            fprintf(stderr, "Unable to find CPU definition\n");
+            exit(1);
+        }
+        irqp = arm_pic_init_cpu(cpu);
+        cpu_irq[n] = irqp[ARM_PIC_CPU_IRQ];
+    }
+
+    {
+        /* We have to use a separate 64 bit variable here to avoid the gcc
+         * "comparison is always false due to limited range of data type"
+         * warning if we are on a host where ram_addr_t is 32 bits.
+         */
+        uint64_t rsz = ram_size;
+        if (rsz > (30ULL * 1024 * 1024 * 1024)) {
+            fprintf(stderr, "vexpress-a57: cannot model more than 30GB RAM\n");
+            exit(1);
+        }
+    }
+
+    memory_region_init_ram(ram, "vexpress.lowmem", ram_size);
+    vmstate_register_ram_global(ram);
+    /* RAM is from 0x80000000 upwards; there is no low-memory alias for it. */
+    memory_region_add_subregion(sysmem, 0x80000000, ram);
+
+    /* 0x2c000000 A15MPCore private memory region (GIC) */
+    dev = qdev_create(NULL, "a15mpcore_priv");
+    qdev_prop_set_uint32(dev, "num-cpu", smp_cpus);
+    qdev_init_nofail(dev);
+    busdev = SYS_BUS_DEVICE(dev);
+    sysbus_mmio_map(busdev, 0, 0x2c000000);
+    for (n = 0; n < smp_cpus; n++) {
+        sysbus_connect_irq(busdev, n, cpu_irq[n]);
+    }
+    /* Interrupts [42:0] are from the motherboard;
+     * [47:43] are reserved; [63:48] are daughterboard
+     * peripherals. Note that some documentation numbers
+     * external interrupts starting from 32 (because there
+     * are internal interrupts 0..31).
+     */
+    for (n = 0; n < 64; n++) {
+        pic[n] = qdev_get_gpio_in(dev, n);
+    }
+
+    /* A57 daughterboard peripherals: not modeled */
+}
+
 static void vexpress_common_init(const VEDBoardInfo *daughterboard,
                                  QEMUMachineInitArgs *args)
 {
@@ -522,6 +590,14 @@ static void vexpress_common_init(const VEDBoardInfo *daughterboard,
     arm_load_kernel(arm_env_get_cpu(first_cpu), &vexpress_binfo);
 }
 
+static const VEDBoardInfo a57_daughterboard = {
+    .motherboard_map = motherboard_aseries_map,
+    .loader_start = 0x80000000,
+    .gic_cpu_if_addr = 0x2c002000,
+    .proc_id = 0x14000237,
+    .init = a57_daughterboard_init,
+};
+
 static void vexpress_a9_init(QEMUMachineInitArgs *args)
 {
     vexpress_common_init(&a9_daughterboard, args);
@@ -530,6 +606,11 @@ static void vexpress_a9_init(QEMUMachineInitArgs *args)
 static void vexpress_a15_init(QEMUMachineInitArgs *args)
 {
     vexpress_common_init(&a15_daughterboard, args);
+}
+
+static void vexpress_a57_init(QEMUMachineInitArgs *args)
+{
+    vexpress_common_init(&a57_daughterboard, args);
 }
 
 static QEMUMachine vexpress_a9_machine = {
@@ -550,10 +631,20 @@ static QEMUMachine vexpress_a15_machine = {
     DEFAULT_MACHINE_OPTIONS,
 };
 
+static QEMUMachine vexpress_a57_machine = {
+    .name = "vexpress-a57",
+    .desc = "ARM Versatile Express for Cortex-A57",
+    .init = vexpress_a57_init,
+    .block_default_type = IF_SCSI,
+    .max_cpus = 4,
+    DEFAULT_MACHINE_OPTIONS,
+};
+
 static void vexpress_machine_init(void)
 {
     qemu_register_machine(&vexpress_a9_machine);
     qemu_register_machine(&vexpress_a15_machine);
+    qemu_register_machine(&vexpress_a57_machine);
 }
 
 machine_init(vexpress_machine_init);
