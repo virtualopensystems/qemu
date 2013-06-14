@@ -410,6 +410,7 @@ enum arm_features {
     ARM_FEATURE_V6,
     ARM_FEATURE_V6K,
     ARM_FEATURE_V7,
+    ARM_FEATURE_V8,
     ARM_FEATURE_THUMB2,
     ARM_FEATURE_MPU,    /* Only has Memory Protection Unit, not full MMU.  */
     ARM_FEATURE_VFP3,

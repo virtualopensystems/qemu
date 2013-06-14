@@ -23,6 +23,11 @@
 #include "cpu.h"
 #include "hw/arm/arm.h"
 
+#ifdef TARGET_AARCH64
+#define AARCH64_CORE_REG(x)   (KVM_REG_ARM64 | KVM_REG_SIZE_U64 | \
+                 KVM_REG_ARM_CORE | KVM_REG_ARM_CORE_REG(x))
+#endif
+
 const KVMCapabilityInfo kvm_arch_required_capabilities[] = {
     KVM_CAP_LAST_INFO
 };
@@ -41,6 +46,28 @@ unsigned long kvm_arch_vcpu_id(CPUState *cpu)
     return cpu->cpu_index;
 }
 
+#ifdef TARGET_AARCH64
+int kvm_arch_init_vcpu(CPUState *cs)
+{
+    struct kvm_vcpu_init init;
+    int ret;
+
+    /* Try initializing with Foundation Models */
+    init.target = KVM_ARM_TARGET_FOUNDATION_V8;
+    memset(init.features, 0, sizeof(init.features));
+    ret = kvm_vcpu_ioctl(cs, KVM_ARM_VCPU_INIT, &init);
+    if (ret) {
+        /* Retry initializing with Fast Models */
+        init.target = KVM_ARM_TARGET_AEM_V8;
+        ret = kvm_vcpu_ioctl(cs, KVM_ARM_VCPU_INIT, &init);
+        if (ret) {
+            return ret;
+        }
+    }
+
+    return ret;
+}
+#else
 int kvm_arch_init_vcpu(CPUState *cs)
 {
     struct kvm_vcpu_init init;
@@ -67,6 +94,7 @@ int kvm_arch_init_vcpu(CPUState *cs)
     }
     return ret;
 }
+#endif
 
 /* We track all the KVM devices which need their memory addresses
  * passing to the kernel in a list of these structures.
@@ -159,6 +187,7 @@ typedef struct Reg {
     int offset;
 } Reg;
 
+#ifndef TARGET_AARCH64
 #define COREREG(KERNELNAME, QEMUFIELD)                       \
     {                                                        \
         KVM_REG_ARM | KVM_REG_SIZE_U32 |                     \
@@ -239,7 +268,52 @@ static const Reg regs[] = {
     VFPSYSREG(FPINST),
     VFPSYSREG(FPINST2),
 };
+#endif
 
+#ifdef TARGET_AARCH64
+int kvm_arch_put_registers(CPUState *cs, int level)
+{
+    struct kvm_one_reg reg;
+    int i;
+    int ret;
+
+    ARMCPU *cpu = ARM_CPU(cs);
+    CPUARMState *env = &cpu->env;
+
+    for (i = 0; i < 31; i++) {
+        reg.id = AARCH64_CORE_REG(regs.regs[i]);
+        reg.addr = (uintptr_t)(env) + offsetof(CPUARMState, xregs[i]);
+        ret = kvm_vcpu_ioctl(cs, KVM_SET_ONE_REG, &reg);
+        if (ret) {
+            return ret;
+        }
+    }
+
+    reg.id = AARCH64_CORE_REG(regs.sp);
+    reg.addr = (uintptr_t)(env) + offsetof(CPUARMState, xregs[31]);
+    ret = kvm_vcpu_ioctl(cs, KVM_SET_ONE_REG, &reg);
+    if (ret) {
+        return ret;
+    }
+
+    reg.id = AARCH64_CORE_REG(regs.pstate);
+    reg.addr = (uintptr_t)(env) + offsetof(CPUARMState, pstate);
+    ret = kvm_vcpu_ioctl(cs, KVM_SET_ONE_REG, &reg);
+    if (ret) {
+        return ret;
+    }
+
+    reg.id = AARCH64_CORE_REG(regs.pc);
+    reg.addr = (uintptr_t)(env) + offsetof(CPUARMState, pc);
+    ret = kvm_vcpu_ioctl(cs, KVM_SET_ONE_REG, &reg);
+    if (ret) {
+        return ret;
+    }
+
+    /* TODO: Set Rest of Registers */
+    return ret;
+}
+#else
 int kvm_arch_put_registers(CPUState *cs, int level)
 {
     ARMCPU *cpu = ARM_CPU(cs);
@@ -321,7 +395,52 @@ int kvm_arch_put_registers(CPUState *cs, int level)
 
     return ret;
 }
+#endif
 
+#ifdef TARGET_AARCH64
+int kvm_arch_get_registers(CPUState *cs)
+{
+    struct kvm_one_reg reg;
+    int i;
+    int ret;
+
+    ARMCPU *cpu = ARM_CPU(cs);
+    CPUARMState *env = &cpu->env;
+
+    for (i = 0; i < 31; i++) {
+        reg.id = AARCH64_CORE_REG(regs.regs[i]);
+        reg.addr = (uintptr_t)(env) + offsetof(CPUARMState, xregs[i]);
+        ret = kvm_vcpu_ioctl(cs, KVM_GET_ONE_REG, &reg);
+        if (ret) {
+            return ret;
+        }
+    }
+
+    reg.id = AARCH64_CORE_REG(regs.sp);
+    reg.addr = (uintptr_t)(env) + offsetof(CPUARMState, xregs[31]);
+    ret = kvm_vcpu_ioctl(cs, KVM_GET_ONE_REG, &reg);
+    if (ret) {
+        return ret;
+    }
+
+    reg.id = AARCH64_CORE_REG(regs.pstate);
+    reg.addr = (uintptr_t)(env) + offsetof(CPUARMState, pstate);
+    ret = kvm_vcpu_ioctl(cs, KVM_GET_ONE_REG, &reg);
+    if (ret) {
+        return ret;
+    }
+
+    reg.id = AARCH64_CORE_REG(regs.pc);
+    reg.addr = (uintptr_t)(env) + offsetof(CPUARMState, pc);
+    ret = kvm_vcpu_ioctl(cs, KVM_GET_ONE_REG, &reg);
+    if (ret) {
+        return ret;
+    }
+
+    /* TODO: Set Rest of Registers */
+    return ret;
+}
+#else
 int kvm_arch_get_registers(CPUState *cs)
 {
     ARMCPU *cpu = ARM_CPU(cs);
@@ -416,6 +535,7 @@ int kvm_arch_get_registers(CPUState *cs)
 
     return 0;
 }
+#endif
 
 void kvm_arch_pre_run(CPUState *cs, struct kvm_run *run)
 {
