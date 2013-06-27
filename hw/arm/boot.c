@@ -17,6 +17,8 @@
 #include "sysemu/device_tree.h"
 #include "qemu/config-file.h"
 
+#define DSB_INSN 0xf57ff04f
+#define CP15_DSB_INSN 0xee070f9a /* mcr cp15, 0, r0, c7, c10, 4 */
 #define KERNEL_ARGS_ADDR 0x100
 
 #ifdef TARGET_AARCH64
@@ -40,6 +42,16 @@ static uint32_t bootloader[] = {
     0x00000000  	/* .word @Board ID Higher 32-bits -- Placeholder */
 };
 
+static uint32_t smpboot[] = {
+    0x180000c5, /* ldr w5, =mbox_value - mbox value for secondary CPUs */
+    0xf94000a4, /* 1: ldr      x4, [x5] - Read address to jump to */
+    0xb4ffffe4, /* cbz x4, 1b - Check if mbox value is zero, if yes retry */
+    0xd61f0080, /* br  x4 - Branch to given address */
+    0x0,        /* padding word */
+    0x0,        /* gic_cpu_if_addr */
+    0x8000fff8  /* mbox_value: default mbox value (aka cpu_release_addr) */
+};
+
 #else
 #define KERNEL_LOAD_ADDR        0x00010000
 #define KERNEL_BOARDID_INDEX    4
@@ -56,7 +68,6 @@ static uint32_t bootloader[] = {
   0, /* Address of kernel args.  Set by integratorcp_init.  */
   0  /* Kernel entry point.  Set by integratorcp_init.  */
 };
-#endif
 
 /* Handling for secondary CPU boot in a multicore system.
  * Unlike the uniprocessor/primary CPU boot, this is platform
@@ -72,8 +83,6 @@ static uint32_t bootloader[] = {
  * for an interprocessor interrupt and polling a configurable
  * location for the kernel secondary CPU entry point.
  */
-#define DSB_INSN 0xf57ff04f
-#define CP15_DSB_INSN 0xee070f9a /* mcr cp15, 0, r0, c7, c10, 4 */
 
 static uint32_t smpboot[] = {
   0xe59f2028, /* ldr r2, gic_cpu_if */
@@ -91,6 +100,7 @@ static uint32_t smpboot[] = {
   0,          /* gic_cpu_if: base address of GIC CPU interface */
   0           /* bootreg: Boot register address is held here */
 };
+#endif
 
 static void default_write_secondary(ARMCPU *cpu,
                                     const struct arm_boot_info *info)
@@ -115,8 +125,12 @@ static void default_reset_secondary(ARMCPU *cpu,
 {
     CPUARMState *env = &cpu->env;
 
+#ifdef TARGET_AARCH64
+    env->pc = info->smp_loader_start;
+#else
     stl_phys_notdirty(info->smp_bootreg_addr, 0);
     env->regs[15] = info->smp_loader_start;
+#endif
 }
 
 #define WRITE_WORD(p, value) do { \
