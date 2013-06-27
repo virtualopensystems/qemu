@@ -18,7 +18,33 @@
 #include "qemu/config-file.h"
 
 #define KERNEL_ARGS_ADDR 0x100
-#define KERNEL_LOAD_ADDR 0x00010000
+
+#ifdef TARGET_AARCH64
+#define KERNEL_LOAD_ADDR        0x00080000
+#define KERNEL_ARGS_INDEX       6
+#define KERNEL_ENTRY_INDEX      8
+#define KERNEL_BOARDID_INDEX    10
+
+static uint32_t bootloader[] = {
+    0x580000c0, 	/* ldr	x0, 18 <_start+0x18> */
+    0xaa1f03e1, 	/* mov	x1, xzr */
+    0xaa1f03e2, 	/* mov	x2, xzr */
+    0xaa1f03e3, 	/* mov	x3, xzr */
+    0x58000084, 	/* ldr	x4, 20 <_start+0x20> */
+    0xd61f0080, 	/* br	x4 */
+    0x00000000, 	/* .word @DTB Lower 32-bits */
+    0x00000000, 	/* .word @DTB Higher 32-bits */
+    0x00000000, 	/* .word @Kernel Entry Lower 32-bits */
+    0x00000000,  	/* .word @Kernel Entry Higher 32-bits */
+    0x00000000, 	/* .word @Board ID Lower 32-bits -- Placeholder */
+    0x00000000  	/* .word @Board ID Higher 32-bits -- Placeholder */
+};
+
+#else
+#define KERNEL_LOAD_ADDR        0x00010000
+#define KERNEL_BOARDID_INDEX    4
+#define KERNEL_ARGS_INDEX       5
+#define KERNEL_ENTRY_INDEX      6
 
 /* The worlds second smallest bootloader.  Set r0-r2, then jump to kernel.  */
 static uint32_t bootloader[] = {
@@ -30,6 +56,7 @@ static uint32_t bootloader[] = {
   0, /* Address of kernel args.  Set by integratorcp_init.  */
   0  /* Kernel entry point.  Set by integratorcp_init.  */
 };
+#endif
 
 /* Handling for secondary CPU boot in a multicore system.
  * Unlike the uniprocessor/primary CPU boot, this is platform
@@ -239,7 +266,6 @@ static int load_dtb(hwaddr addr, const struct arm_boot_info *binfo)
         fprintf(stderr, "Couldn't open dtb file %s\n", binfo->dtb_filename);
         return -1;
     }
-
     fdt = load_device_tree(filename, &size);
     if (!fdt) {
         fprintf(stderr, "Couldn't open dtb file %s\n", filename);
@@ -322,8 +348,15 @@ static void do_cpu_reset(void *opaque)
             env->regs[15] = info->entry & 0xfffffffe;
             env->thumb = info->entry & 1;
         } else {
+#ifdef TARGET_AARCH64
+            env->pstate = PSR_D_BIT | PSR_A_BIT | PSR_I_BIT | PSR_F_BIT | PSR_MODE_EL1h;
+#endif
             if (env == first_cpu) {
+#ifdef TARGET_AARCH64
+                env->pc = info->loader_start;
+#else
                 env->regs[15] = info->loader_start;
+#endif
                 if (!info->dtb_filename) {
                     if (old_param) {
                         set_kernel_args_old(info);
@@ -428,7 +461,7 @@ void arm_load_kernel(ARMCPU *cpu, struct arm_boot_info *info)
         }
         info->initrd_size = initrd_size;
 
-        bootloader[4] = info->board_id;
+        bootloader[KERNEL_BOARDID_INDEX] = info->board_id;
 
         /* for device tree boot, we pass the DTB directly in r2. Otherwise
          * we point to the kernel args.
@@ -443,9 +476,9 @@ void arm_load_kernel(ARMCPU *cpu, struct arm_boot_info *info)
             if (load_dtb(dtb_start, info)) {
                 exit(1);
             }
-            bootloader[5] = dtb_start;
+            bootloader[KERNEL_ARGS_INDEX] = dtb_start;
         } else {
-            bootloader[5] = info->loader_start + KERNEL_ARGS_ADDR;
+            bootloader[KERNEL_ARGS_INDEX] = info->loader_start + KERNEL_ARGS_ADDR;
             if (info->ram_size >= (1ULL << 32)) {
                 fprintf(stderr, "qemu: RAM size must be less than 4GB to boot"
                         " Linux kernel using ATAGS (try passing a device tree"
@@ -453,7 +486,7 @@ void arm_load_kernel(ARMCPU *cpu, struct arm_boot_info *info)
                 exit(1);
             }
         }
-        bootloader[6] = entry;
+        bootloader[KERNEL_ENTRY_INDEX] = entry;
         for (n = 0; n < sizeof(bootloader) / 4; n++) {
             bootloader[n] = tswap32(bootloader[n]);
         }
