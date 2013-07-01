@@ -903,7 +903,7 @@ DO_GEN_ST(st8)
 DO_GEN_ST(st16)
 DO_GEN_ST(st32)
 
-static inline void gen_set_pc_im(target_ulong val)
+static inline void gen_set_pc_im(DisasContext *s, target_ulong val)
 {
     tcg_gen_movi_i32(cpu_R[15], val);
 }
@@ -3418,10 +3418,10 @@ static inline void gen_goto_tb(DisasContext *s, int n, target_ulong dest)
     tb = s->tb;
     if ((tb->pc & TARGET_PAGE_MASK) == (dest & TARGET_PAGE_MASK)) {
         tcg_gen_goto_tb(n);
-        gen_set_pc_im(dest);
+        gen_set_pc_im(s, dest);
         tcg_gen_exit_tb((tcg_target_long)tb + n);
     } else {
-        gen_set_pc_im(dest);
+        gen_set_pc_im(s, dest);
         tcg_gen_exit_tb(0);
     }
 }
@@ -3550,7 +3550,7 @@ gen_set_condexec (DisasContext *s)
 static void gen_exception_insn(DisasContext *s, int offset, int excp)
 {
     gen_set_condexec(s);
-    gen_set_pc_im(s->pc - offset);
+    gen_set_pc_im(s, s->pc - offset);
     gen_exception(excp);
     s->is_jmp = DISAS_JUMP;
 }
@@ -3559,7 +3559,7 @@ static void gen_nop_hint(DisasContext *s, int val)
 {
     switch (val) {
     case 3: /* wfi */
-        gen_set_pc_im(s->pc);
+        gen_set_pc_im(s, s->pc);
         s->is_jmp = DISAS_WFI;
         break;
     case 2: /* wfe */
@@ -6335,7 +6335,7 @@ static int disas_coproc_insn(CPUARMState * env, DisasContext *s, uint32_t insn)
             if (isread) {
                 return 1;
             }
-            gen_set_pc_im(s->pc);
+            gen_set_pc_im(s, s->pc);
             s->is_jmp = DISAS_WFI;
             return 0;
         default:
@@ -6351,7 +6351,7 @@ static int disas_coproc_insn(CPUARMState * env, DisasContext *s, uint32_t insn)
                     tmp64 = tcg_const_i64(ri->resetvalue);
                 } else if (ri->readfn) {
                     TCGv_ptr tmpptr;
-                    gen_set_pc_im(s->pc);
+                    gen_set_pc_im(s, s->pc);
                     tmp64 = tcg_temp_new_i64();
                     tmpptr = tcg_const_ptr(ri);
                     gen_helper_get_cp_reg64(tmp64, cpu_env, tmpptr);
@@ -6374,7 +6374,7 @@ static int disas_coproc_insn(CPUARMState * env, DisasContext *s, uint32_t insn)
                     tmp = tcg_const_i32(ri->resetvalue);
                 } else if (ri->readfn) {
                     TCGv_ptr tmpptr;
-                    gen_set_pc_im(s->pc);
+                    gen_set_pc_im(s, s->pc);
                     tmp = tcg_temp_new_i32();
                     tmpptr = tcg_const_ptr(ri);
                     gen_helper_get_cp_reg(tmp, cpu_env, tmpptr);
@@ -6409,7 +6409,7 @@ static int disas_coproc_insn(CPUARMState * env, DisasContext *s, uint32_t insn)
                 tcg_temp_free_i32(tmphi);
                 if (ri->writefn) {
                     TCGv_ptr tmpptr = tcg_const_ptr(ri);
-                    gen_set_pc_im(s->pc);
+                    gen_set_pc_im(s, s->pc);
                     gen_helper_set_cp_reg64(cpu_env, tmpptr, tmp64);
                     tcg_temp_free_ptr(tmpptr);
                 } else {
@@ -6420,7 +6420,7 @@ static int disas_coproc_insn(CPUARMState * env, DisasContext *s, uint32_t insn)
                 if (ri->writefn) {
                     TCGv_i32 tmp;
                     TCGv_ptr tmpptr;
-                    gen_set_pc_im(s->pc);
+                    gen_set_pc_im(s, s->pc);
                     tmp = load_reg(s, rt);
                     tmpptr = tcg_const_ptr(ri);
                     gen_helper_set_cp_reg(cpu_env, tmpptr, tmp);
@@ -7964,7 +7964,7 @@ static void disas_arm_insn(CPUARMState * env, DisasContext *s)
             break;
         case 0xf:
             /* swi */
-            gen_set_pc_im(s->pc);
+            gen_set_pc_im(s, s->pc);
             s->is_jmp = DISAS_SWI;
             break;
         default:
@@ -9814,7 +9814,7 @@ static void disas_thumb_insn(CPUARMState *env, DisasContext *s)
 
         if (cond == 0xf) {
             /* swi */
-            gen_set_pc_im(s->pc);
+            gen_set_pc_im(s, s->pc);
             s->is_jmp = DISAS_SWI;
             break;
         }
@@ -10062,7 +10062,7 @@ static inline void gen_intermediate_code_internal(CPUARMState *env,
             gen_set_label(dc->condlabel);
         }
         if (dc->condjmp || !dc->is_jmp) {
-            gen_set_pc_im(dc->pc);
+            gen_set_pc_im(dc, dc->pc);
             dc->condjmp = 0;
         }
         gen_set_condexec(dc);
