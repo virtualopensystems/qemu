@@ -304,7 +304,12 @@ static int sys_uname(struct new_utsname *buf)
   memset(buf, 0, sizeof(*buf));
   COPY_UTSNAME_FIELD(buf->sysname, uts_buf.sysname);
   COPY_UTSNAME_FIELD(buf->nodename, uts_buf.nodename);
+#ifdef TARGET_AARCH64
+  /* glibc refuses to run on older kernels */
+  COPY_UTSNAME_FIELD(buf->release, "3.8.0");
+#else
   COPY_UTSNAME_FIELD(buf->release, uts_buf.release);
+#endif
   COPY_UTSNAME_FIELD(buf->version, uts_buf.version);
   COPY_UTSNAME_FIELD(buf->machine, uts_buf.machine);
 #ifdef _GNU_SOURCE
