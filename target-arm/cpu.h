@@ -303,10 +303,17 @@ int cpu_arm_handle_mmu_fault (CPUARMState *env, target_ulong address, int rw,
                               int mmu_idx);
 #define cpu_handle_mmu_fault cpu_arm_handle_mmu_fault
 
+#ifndef TARGET_AARCH64
 static inline void cpu_set_tls(CPUARMState *env, target_ulong newtls)
 {
   env->cp15.c13_tls2 = newtls;
 }
+#else
+static inline void cpu_set_tls(CPUARMState *env, target_ulong newtls)
+{
+    env->sr.tpidr_el0 = newtls;
+}
+#endif
 
 #define CPSR_M (0x1f)
 #define CPSR_T (1 << 5)
@@ -795,12 +802,22 @@ static inline int cpu_mmu_index (CPUARMState *env)
 }
 
 #if defined(CONFIG_USER_ONLY)
+#ifndef TARGET_AARCH64
 static inline void cpu_clone_regs(CPUARMState *env, target_ulong newsp)
 {
     if (newsp)
         env->regs[13] = newsp;
     env->regs[0] = 0;
 }
+#else
+static inline void cpu_clone_regs(CPUARMState *env, target_ulong newsp)
+{
+    if (newsp) {
+        env->xregs[31] = newsp;
+    }
+    env->xregs[0] = 0;
+}
+#endif
 #endif
 
 #include "exec/cpu-all.h"
