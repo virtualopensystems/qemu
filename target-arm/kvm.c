@@ -700,6 +700,7 @@ int kvm_arch_handle_exit(CPUState *cs, struct kvm_run *run)
 
 void kvm_arch_reset_vcpu(CPUState *cs)
 {
+#ifndef TARGET_AARCH64
     /* Feed the kernel back its initial register state */
     ARMCPU *cpu = ARM_CPU(cs);
 
@@ -709,6 +710,7 @@ void kvm_arch_reset_vcpu(CPUState *cs)
     if (!write_list_to_kvmstate(cpu)) {
         abort();
     }
+#endif
 }
 
 bool kvm_arch_stop_on_emulation_error(CPUState *cs)
