@@ -407,7 +407,7 @@ static void machvirt_init(QEMUMachineInitArgs *args)
     }
     fdt_add_cpu_nodes(virt_fdt, mi, smp_cpus);
 
-    memory_region_init_ram(ram, "mach-virt.ram", ram_size);
+    memory_region_init_ram(ram, NULL, "mach-virt.ram", ram_size);
     vmstate_register_ram_global(ram);
     memory_region_add_subregion(sysmem, mi->mem_base, ram);
 
