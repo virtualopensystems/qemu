@@ -52,6 +52,7 @@
 #define IO_LEN 0x000f0000
 
 #if defined(TARGET_AARCH64)
+#define CPU_RELEASE_OFFSET 0x0000fff8
 #define DEFAULT_CPU_MODEL "cortex-a57"
 #elif defined(TARGET_ARM)
 #define DEFAULT_CPU_MODEL "cortex-a15"
@@ -170,7 +171,7 @@ static void *initial_fdt(struct machine_info *mi)
     qemu_devtree_setprop_cell(fdt, "/soc", "#interrupt-cells", 0x1);
 
     /* No PSCI for TCG yet */
-#ifdef CONFIG_KVM
+#if defined (CONFIG_KVM) && !defined(TARGET_AARCH64)
     if (kvm_enabled()) {
         qemu_devtree_add_subnode(fdt, "/psci");
         qemu_devtree_setprop_string(fdt, "/psci", "compatible", "arm,psci");
@@ -234,7 +235,14 @@ static void fdt_add_cpu_nodes(void *fdt, struct machine_info *mi, int smp_cpus)
             mi->cpu_compatible);
 
         if (smp_cpus > 1) {
+#if defined(TARGET_AARCH64)
+            qemu_devtree_setprop_string(fdt, cpu_name, "enable-method",
+                "spin-table");
+            qemu_devtree_setprop_u64(fdt, cpu_name, "cpu-release-addr",
+                (mi->mem_base + CPU_RELEASE_OFFSET));
+#else
             qemu_devtree_setprop_string(fdt, cpu_name, "enable-method", "psci");
+#endif
         }
 
         qemu_devtree_setprop_cell(fdt, cpu_name, "reg", cpu);
@@ -437,6 +445,10 @@ static void machvirt_init(QEMUMachineInitArgs *args)
     machvirt_binfo.nb_cpus = smp_cpus;
     machvirt_binfo.board_id = -1;
     machvirt_binfo.loader_start = mi->mem_base;
+    machvirt_binfo.smp_loader_start = mi->mem_base + 0x1000;
+#if defined(TARGET_AARCH64)
+    machvirt_binfo.smp_bootreg_addr = mi->mem_base + CPU_RELEASE_OFFSET;
+#endif
     machvirt_binfo.get_dtb = machvirt_dtb;
     arm_load_kernel(arm_env_get_cpu(first_cpu), &machvirt_binfo);
 }
