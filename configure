@@ -4485,6 +4485,7 @@ case "$target_name" in
     # Make sure the target and host cpus are compatible
     if test "$kvm" = "yes" -a "$target_softmmu" = "yes" -a \
       \( "$target_name" = "$cpu" -o \
+      \( "$target_name" = "arm" -a "$cpu" = "aarch64" \) -o \
       \( "$target_name" = "ppcemb" -a "$cpu" = "ppc" \) -o \
       \( "$target_name" = "ppc64"  -a "$cpu" = "ppc" \) -o \
       \( "$target_name" = "ppc"    -a "$cpu" = "ppc64" \) -o \
