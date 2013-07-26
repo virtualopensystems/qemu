@@ -46,6 +46,8 @@
 
 #define CPU_NAME_MAX_LEN 16
 
+#define NUM_VIRTIO_TRANSPORTS 4
+
 #define MEM_BASE 0
 #define MAX_MEM 0xff800000
 #define IO_BASE 0xfff00000
@@ -307,9 +309,9 @@ static void fdt_add_soc_nodes(void *fdt, struct machine_info *mi, qemu_irq *pic)
     char compatible_timer[] = "arm,sp804\0arm,primecell";
     char clock_names_uart[] = "uartclk\0apb_pclk";
     char clock_names_timer[] = "timerclk\0apb_pclk";
-    uint32_t base;
-    uint32_t len;
-    int irq;
+    uint32_t base, acells;
+    uint32_t len, scells;
+    int irq, i;
 
     clock_phandle = qemu_devtree_alloc_phandle(fdt);
     qemu_devtree_add_subnode(fdt, "/soc/clock");
@@ -349,6 +351,27 @@ static void fdt_add_soc_nodes(void *fdt, struct machine_info *mi, qemu_irq *pic)
             clock_phandle);
     qemu_devtree_setprop(fdt, "/soc/timer", "clock-names", clock_names_timer,
             sizeof(clock_names_timer));
+
+    /* virtIO devices */
+    acells = qemu_devtree_getprop_cell(fdt, "/", "#address-cells");
+    scells = qemu_devtree_getprop_cell(fdt, "/", "#size-cells");
+
+    for (i = NUM_VIRTIO_TRANSPORTS - 1; i >= 0; i--) {
+        len = 0x200;
+        base = mi->io_base;
+        mi->io_base += len;
+        irq = 40 + i;
+
+        sysbus_create_simple("virtio-mmio", base, pic[irq]);
+
+        char *nodename = g_strdup_printf("/virtio_mmio@%" PRIx64, (hwaddr)base);
+        qemu_devtree_add_subnode(fdt, nodename);
+        qemu_devtree_setprop_string(fdt, nodename, "compatible", "virtio,mmio");
+        qemu_devtree_setprop_sized_cells(fdt, nodename, "reg", acells, base, scells, len);
+        qemu_devtree_setprop_cells(fdt, nodename, "interrupt-parent", 0);
+        qemu_devtree_setprop_cells(fdt, nodename, "interrupts", 0, irq, 1);
+        g_free(nodename);
+    }
 }
 
 static void *machvirt_dtb(hwaddr addr, const struct arm_boot_info *binfo,
