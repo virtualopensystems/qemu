@@ -268,12 +268,10 @@ static void set_kernel_args_old(const struct arm_boot_info *info)
 
 static int load_dtb(hwaddr addr, const struct arm_boot_info *binfo)
 {
-    uint32_t *mem_reg_property;
-    uint32_t mem_reg_propsize;
     void *fdt = NULL;
     char *filename;
     int size, rc;
-    uint32_t acells, scells, hival;
+    uint32_t acells, scells;
 
     if (binfo->dtb_filename) {
         filename = qemu_find_file(QEMU_FILE_TYPE_BIOS, binfo->dtb_filename);
@@ -304,30 +302,18 @@ static int load_dtb(hwaddr addr, const struct arm_boot_info *binfo)
         goto fail;
     }
 
-    mem_reg_propsize = acells + scells;
-    mem_reg_property = g_new0(uint32_t, mem_reg_propsize);
-    mem_reg_property[acells - 1] = cpu_to_be32(binfo->loader_start);
-    hival = cpu_to_be32(binfo->loader_start >> 32);
-    if (acells > 1) {
-        mem_reg_property[acells - 2] = hival;
-    } else if (hival != 0) {
+    rc = qemu_devtree_setprop_sized_cells(fdt, "/memory", "reg",
+                                          acells, binfo->loader_start,
+                                          scells, binfo->ram_size);
+    if (rc == 1) {
         fprintf(stderr, "qemu: dtb file not compatible with "
                 "RAM start address > 4GB\n");
         goto fail;
-    }
-    mem_reg_property[acells + scells - 1] = cpu_to_be32(binfo->ram_size);
-    hival = cpu_to_be32(binfo->ram_size >> 32);
-    if (scells > 1) {
-        mem_reg_property[acells + scells - 2] = hival;
-    } else if (hival != 0) {
+    } else if (rc == 2) {
         fprintf(stderr, "qemu: dtb file not compatible with "
                 "RAM size > 4GB\n");
         goto fail;
-    }
-
-    rc = qemu_devtree_setprop(fdt, "/memory", "reg", mem_reg_property,
-                              mem_reg_propsize * sizeof(uint32_t));
-    if (rc < 0) {
+    } else if (rc != 0) {
         fprintf(stderr, "couldn't set /memory/reg\n");
         goto fail;
     }
