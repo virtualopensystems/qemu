@@ -18,10 +18,9 @@
 #include "qemu/config-file.h"
 
 #define KERNEL_ARGS_ADDR 0x100
-#define KERNEL_LOAD_ADDR 0x00010000
 
 /* The worlds second smallest bootloader.  Set r0-r2, then jump to kernel.  */
-static uint32_t bootloader[] = {
+static uint32_t bootloader_arm32[] = {
   0xe3a00000, /* mov     r0, #0 */
   0xe59f1004, /* ldr     r1, [pc, #4] */
   0xe59f2004, /* ldr     r2, [pc, #4] */
@@ -48,7 +47,7 @@ static uint32_t bootloader[] = {
 #define DSB_INSN 0xf57ff04f
 #define CP15_DSB_INSN 0xee070f9a /* mcr cp15, 0, r0, c7, c10, 4 */
 
-static uint32_t smpboot[] = {
+static uint32_t smpboot_arm32[] = {
   0xe59f2028, /* ldr r2, gic_cpu_if */
   0xe59f0028, /* ldr r0, startaddr */
   0xe3a01001, /* mov r1, #1 */
@@ -65,13 +64,60 @@ static uint32_t smpboot[] = {
   0           /* bootreg: Boot register address is held here */
 };
 
+/*
+ * The bootloaders to be used are referenced by the following pointers
+ * An appropriate bootloader is selected depending on the architecture
+ * i.e. ARMv7, ARMv8 (AARCH64 and AARCH32)
+ */
+static uint32_t *bootloader = NULL;
+static uint32_t  bootloader_array_size = 0;
+
+static uint32_t *smpboot = NULL;
+static uint32_t  smpboot_array_size = 0;
+
+/*
+ * An index gives the location in the bootloader array, where we put the board
+ * ID, kernel arguments and kernel entry addresses. These are different for
+ * ARMv7 and ARMv8 bootloaders defined above.
+ */
+static uint32_t kernel_boardid_index = 0;
+static uint32_t kernel_args_index    = 0;
+static uint32_t kernel_entry_index   = 0;
+
+/*
+ * Similarly, the kernel loading address also depends on the architecture,
+ * i.e. its different for ARMv7, ARMv8 (AARCH64 and AARCH32)
+ */
+static uint32_t kernel_load_addr = 0x0;
+
+static void setup_boot_env_32(void)
+{
+    bootloader = bootloader_arm32;
+    bootloader_array_size = ARRAY_SIZE(bootloader_arm32);
+    smpboot = smpboot_arm32;
+    smpboot_array_size = ARRAY_SIZE(smpboot_arm32);
+
+    kernel_boardid_index = bootloader_array_size - 3;
+    kernel_args_index    = bootloader_array_size - 2;
+    kernel_entry_index   = bootloader_array_size - 1;
+    return;
+}
+
+static void setup_boot_env(ARMCPU *cpu)
+{
+    /* ARMv7 */
+    kernel_load_addr = 0x00010000;
+    setup_boot_env_32();
+    return;
+}
+
 static void default_write_secondary(ARMCPU *cpu,
                                     const struct arm_boot_info *info)
 {
     int n;
-    smpboot[ARRAY_SIZE(smpboot) - 1] = info->smp_bootreg_addr;
-    smpboot[ARRAY_SIZE(smpboot) - 2] = info->gic_cpu_if_addr;
-    for (n = 0; n < ARRAY_SIZE(smpboot); n++) {
+    smpboot[smpboot_array_size - 1] = info->smp_bootreg_addr;
+    smpboot[smpboot_array_size - 2] = info->gic_cpu_if_addr;
+    for (n = 0; n < smpboot_array_size; n++) {
         /* Replace DSB with the pre-v7 DSB if necessary. */
         if (!arm_feature(&cpu->env, ARM_FEATURE_V7) &&
             smpboot[n] == DSB_INSN) {
@@ -79,7 +125,8 @@ static void default_write_secondary(ARMCPU *cpu,
         }
         smpboot[n] = tswap32(smpboot[n]);
     }
-    rom_add_blob_fixed("smpboot", smpboot, sizeof(smpboot),
+    rom_add_blob_fixed("smpboot", smpboot,
+                       smpboot_array_size * sizeof(uint32_t),
                        info->smp_loader_start);
 }
 
@@ -360,6 +407,9 @@ void arm_load_kernel(ARMCPU *cpu, struct arm_boot_info *info)
     hwaddr entry;
     int big_endian;
 
+    /* Select the bootloader to use and setup array indices, kernel entry etc */
+    setup_boot_env(cpu);
+
     /* Load the kernel.  */
     if (!info->kernel_filename) {
         fprintf(stderr, "Kernel image must be specified\n");
@@ -406,9 +456,9 @@ void arm_load_kernel(ARMCPU *cpu, struct arm_boot_info *info)
                                   &is_linux);
     }
     if (kernel_size < 0) {
-        entry = info->loader_start + KERNEL_LOAD_ADDR;
+        entry = info->loader_start + kernel_load_addr;
         kernel_size = load_image_targphys(info->kernel_filename, entry,
-                                          info->ram_size - KERNEL_LOAD_ADDR);
+                                          info->ram_size - kernel_load_addr);
         is_linux = 1;
     }
     if (kernel_size < 0) {
@@ -439,7 +489,7 @@ void arm_load_kernel(ARMCPU *cpu, struct arm_boot_info *info)
         }
         info->initrd_size = initrd_size;
 
-        bootloader[4] = info->board_id;
+        bootloader[kernel_boardid_index] = info->board_id;
 
         /* for device tree boot, we pass the DTB directly in r2. Otherwise
          * we point to the kernel args.
@@ -454,9 +504,9 @@ void arm_load_kernel(ARMCPU *cpu, struct arm_boot_info *info)
             if (load_dtb(dtb_start, info)) {
                 exit(1);
             }
-            bootloader[5] = dtb_start;
+            bootloader[kernel_args_index] = dtb_start;
         } else {
-            bootloader[5] = info->loader_start + KERNEL_ARGS_ADDR;
+            bootloader[kernel_args_index] = info->loader_start + KERNEL_ARGS_ADDR;
             if (info->ram_size >= (1ULL << 32)) {
                 fprintf(stderr, "qemu: RAM size must be less than 4GB to boot"
                         " Linux kernel using ATAGS (try passing a device tree"
@@ -464,11 +514,12 @@ void arm_load_kernel(ARMCPU *cpu, struct arm_boot_info *info)
                 exit(1);
             }
         }
-        bootloader[6] = entry;
-        for (n = 0; n < sizeof(bootloader) / 4; n++) {
+        bootloader[kernel_entry_index] = entry;
+        for (n = 0; n < bootloader_array_size; n++) {
             bootloader[n] = tswap32(bootloader[n]);
         }
-        rom_add_blob_fixed("bootloader", bootloader, sizeof(bootloader),
+        rom_add_blob_fixed("bootloader", bootloader,
+                           bootloader_array_size * sizeof(uint32_t),
                            info->loader_start);
         if (info->nb_cpus > 1) {
             info->write_secondary_boot(cpu, info);
