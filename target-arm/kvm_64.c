@@ -27,12 +27,19 @@ static uint32_t kvm_arm_targets[KVM_ARM_NUM_TARGETS] = {
     KVM_ARM_TARGET_CORTEX_A57
 };
 
+#define ARM_VCPU_FEATURE_FLAGS(cpuid, is_aarch32)  		\
+((!!(cpuid) << KVM_ARM_VCPU_POWER_OFF) | (is_aarch32 << KVM_ARM_VCPU_EL1_32BIT))
+
 int kvm_arch_init_vcpu(CPUState *cs)
 {
     struct kvm_vcpu_init init;
     int ret, i;
 
+    ARMCPU *cpu = ARM_CPU(cs);
+    CPUARMState *env = &cpu->env;
+
     memset(init.features, 0, sizeof(init.features));
+    init.features[0] = ARM_VCPU_FEATURE_FLAGS(cs->cpu_index, !env->aarch64);
     /* Find an appropriate target CPU type.
      * KVM does not provide means to detect the host CPU type on aarch64,
      * and simply refuses to initialize, if the CPU type mis-matches;

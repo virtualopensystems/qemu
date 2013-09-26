@@ -157,6 +157,7 @@ static void setup_boot_env(ARMCPU *cpu)
 static void default_write_secondary(ARMCPU *cpu,
                                     const struct arm_boot_info *info)
 {
+#ifndef TARGET_AARCH64
     int n;
     smpboot[smpboot_array_size - 1] = info->smp_bootreg_addr;
     smpboot[smpboot_array_size - 2] = info->gic_cpu_if_addr;
@@ -171,15 +172,18 @@ static void default_write_secondary(ARMCPU *cpu,
     rom_add_blob_fixed("smpboot", smpboot,
                        smpboot_array_size * sizeof(uint32_t),
                        info->smp_loader_start);
+#endif
 }
 
 static void default_reset_secondary(ARMCPU *cpu,
                                     const struct arm_boot_info *info)
 {
+#ifndef TARGET_AARCH64
     CPUARMState *env = &cpu->env;
 
     stl_phys_notdirty(info->smp_bootreg_addr, 0);
     env->regs[15] = info->smp_loader_start;
+#endif
 }
 
 #define WRITE_WORD(p, value) do { \
