@@ -20,6 +20,10 @@
 #define KERNEL_ARGS_ADDR 0x100
 
 #ifdef TARGET_AARCH64
+#define COMPAT_PSR_F_BIT    0x00000040
+#define COMPAT_PSR_I_BIT    0x00000080
+#define COMPAT_PSR_MODE_SVC 0x00000013
+
 static uint32_t bootloader_arm64[] = {
     0x580000c0, 	/* ldr	x0, 18 ; Load the lower 32-bits of DTB */
     0xaa1f03e1, 	/* mov	x1, xzr */
@@ -144,7 +148,8 @@ static void setup_boot_env(ARMCPU *cpu)
     }
     else {
         /* AARCH32 Mode */
-        /* TODO: Specify Kernel Load Address for AARCH32 */
+        kernel_load_addr = 0x00008000;
+        setup_boot_env_32();
     }
 #else
     /* ARMv7 */
@@ -431,7 +436,7 @@ static void do_cpu_reset(void *opaque)
             if(env->aarch64) {
                 env->pstate = PSR_D_BIT | PSR_A_BIT | PSR_I_BIT | PSR_F_BIT | PSR_MODE_EL1h;
             } else {
-                hw_error("AArch32 mode is currently not supported\n");
+                env->pstate = COMPAT_PSR_I_BIT | COMPAT_PSR_F_BIT | COMPAT_PSR_MODE_SVC;
             }
             env->xregs[0] =  0;
             env->xregs[1] = -1;
