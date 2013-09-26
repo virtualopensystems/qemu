@@ -118,6 +118,14 @@ static VirtBoardInfo machines[] = {
         .memmap = a15memmap,
         .irqmap = a15irqmap,
     },
+    {
+        .cpu_model = "cortex-a57",
+        .cpu_compatible = "arm,arm-v8",
+        .qdevname = "a57mpcore_priv",
+        .gic_compatible = "arm,cortex-a15-gic",
+        .memmap = a15memmap,
+        .irqmap = a15irqmap,
+    },
 };
 
 static VirtBoardInfo *find_machine_info(const char *cpu)

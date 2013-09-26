@@ -19,6 +19,23 @@
 
 #define KERNEL_ARGS_ADDR 0x100
 
+#ifdef TARGET_AARCH64
+static uint32_t bootloader_arm64[] = {
+    0x580000c0, 	/* ldr	x0, 18 ; Load the lower 32-bits of DTB */
+    0xaa1f03e1, 	/* mov	x1, xzr */
+    0xaa1f03e2, 	/* mov	x2, xzr */
+    0xaa1f03e3, 	/* mov	x3, xzr */
+    0x58000084, 	/* ldr	x4, 20 ; Load the lower 32-bits of kernel entry */
+    0xd61f0080, 	/* br	x4     ; Jump to the kernel entry point */
+    0x00000000, 	/* .word @DTB Lower 32-bits */
+    0x00000000, 	/* .word @DTB Higher 32-bits */
+    0x00000000, 	/* .word @Kernel Entry Lower 32-bits */
+    0x00000000,  	/* .word @Kernel Entry Higher 32-bits */
+    0x00000000, 	/* .word @Board ID Lower 32-bits -- Placeholder */
+    0x00000000  	/* .word @Board ID Higher 32-bits -- Placeholder */
+};
+#endif
+
 /* The worlds second smallest bootloader.  Set r0-r2, then jump to kernel.  */
 static uint32_t bootloader_arm32[] = {
   0xe3a00000, /* mov     r0, #0 */
@@ -103,11 +120,37 @@ static void setup_boot_env_32(void)
     return;
 }
 
+#ifdef TARGET_AARCH64
+static void setup_boot_env_64(void)
+{
+    bootloader = bootloader_arm64;
+    bootloader_array_size = ARRAY_SIZE(bootloader_arm64);
+
+    kernel_args_index    = bootloader_array_size - 6;
+    kernel_entry_index   = bootloader_array_size - 4;
+    kernel_boardid_index = bootloader_array_size - 2;
+    return;
+}
+#endif
+
 static void setup_boot_env(ARMCPU *cpu)
 {
+#ifdef TARGET_AARCH64
+    CPUARMState *env = &cpu->env;
+    if(env->aarch64) {
+        /* AARCH64 Mode */
+        kernel_load_addr = 0x00080000;
+        setup_boot_env_64();
+    }
+    else {
+        /* AARCH32 Mode */
+        /* TODO: Specify Kernel Load Address for AARCH32 */
+    }
+#else
     /* ARMv7 */
     kernel_load_addr = 0x00010000;
     setup_boot_env_32();
+#endif
     return;
 }
 
@@ -380,8 +423,22 @@ static void do_cpu_reset(void *opaque)
             env->regs[15] = info->entry & 0xfffffffe;
             env->thumb = info->entry & 1;
         } else {
+#ifdef TARGET_AARCH64
+            if(env->aarch64) {
+                env->pstate = PSR_D_BIT | PSR_A_BIT | PSR_I_BIT | PSR_F_BIT | PSR_MODE_EL1h;
+            } else {
+                hw_error("AArch32 mode is currently not supported\n");
+            }
+            env->xregs[0] =  0;
+            env->xregs[1] = -1;
+#endif
             if (CPU(cpu) == first_cpu) {
+#ifdef TARGET_AARCH64
+                env->xregs[2] = bootloader[kernel_args_index];
+                env->pc = info->loader_start;
+#else
                 env->regs[15] = info->loader_start;
+#endif
                 if (!info->dtb_filename) {
                     if (old_param) {
                         set_kernel_args_old(info);
