@@ -27,6 +27,8 @@
 #include "sysemu/sysemu.h"
 #include "sysemu/kvm.h"
 
+extern int aarch32_mode;
+
 static void arm_cpu_set_pc(CPUState *cs, vaddr value)
 {
     ARMCPU *cpu = ARM_CPU(cs);
@@ -85,8 +87,11 @@ static void arm_cpu_reset(CPUState *s)
     }
 
     if (arm_feature(env, ARM_FEATURE_AARCH64)) {
-        /* 64 bit CPUs always start in 64 bit mode */
-        env->aarch64 = 1;
+        if(aarch32_mode) {
+            env->aarch64 = 0;  /* Boot a 32-bit Guest */
+        } else {
+            env->aarch64 = 1;  /* Boot a 64-bit Guest */
+        }
     }
 
 #if defined(CONFIG_USER_ONLY)

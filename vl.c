@@ -207,6 +207,7 @@ CharDriverState *virtcon_hds[MAX_VIRTIO_CONSOLES];
 CharDriverState *sclp_hds[MAX_SCLP_CONSOLES];
 int win2k_install_hack = 0;
 int singlestep = 0;
+int aarch32_mode = 0;
 int smp_cpus = 1;
 int max_cpus = 0;
 int smp_cores = 1;
@@ -3112,6 +3113,9 @@ int main(int argc, char **argv, char **envp)
                 break;
             case QEMU_OPTION_dtb:
                 qemu_opts_set(qemu_find_opts("machine"), 0, "dtb", optarg);
+                break;
+            case QEMU_OPTION_aarch32_mode:
+                aarch32_mode = 1;
                 break;
             case QEMU_OPTION_cdrom:
                 drive_add(IF_DEFAULT, 2, optarg, CDROM_OPTS);

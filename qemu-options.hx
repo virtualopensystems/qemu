@@ -72,6 +72,14 @@ STEXI
 Select CPU model (@code{-cpu help} for list and additional feature selection)
 ETEXI
 
+DEF("aarch32-mode", 0, QEMU_OPTION_aarch32_mode, \
+    "-aarch32-mode   enable aarch32 mode support on aarch64\n", QEMU_ARCH_ARM)
+STEXI
+@item -aarch32-mode
+@findex -aarch32-mode
+Enable aarch32 guest support on aarch64.
+ETEXI
+
 DEF("smp", HAS_ARG, QEMU_OPTION_smp,
     "-smp [cpus=]n[,maxcpus=cpus][,cores=cores][,threads=threads][,sockets=sockets]\n"
     "                set the number of CPUs to 'n' [default=1]\n"
