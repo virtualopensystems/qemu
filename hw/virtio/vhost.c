@@ -14,7 +14,6 @@
  */
 
 #include "hw/virtio/vhost.h"
-#include "hw/virtio/vhost-backend.h"
 #include "hw/hw.h"
 #include "qemu/atomic.h"
 #include "qemu/range.h"
@@ -815,10 +814,13 @@ static void vhost_virtqueue_cleanup(struct vhost_virtqueue *vq)
 }
 
 int vhost_dev_init(struct vhost_dev *hdev, int devfd, const char *devpath,
-                   bool force)
+                   VhostBackendType backend_type, bool force)
 {
     uint64_t features;
     int i, r;
+
+    hdev->backend_type = backend_type;
+
     if (devfd >= 0) {
         hdev->control = devfd;
     } else {

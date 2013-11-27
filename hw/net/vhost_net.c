@@ -36,7 +36,6 @@
 #include <stdio.h>
 
 #include "hw/virtio/vhost.h"
-#include "hw/virtio/vhost-backend.h"
 #include "hw/virtio/virtio-bus.h"
 
 struct vhost_net {
@@ -113,7 +112,7 @@ struct vhost_net *vhost_net_init(NetClientState *backend, int devfd,
     net->dev.nvqs = 2;
     net->dev.vqs = net->vqs;
 
-    r = vhost_dev_init(&net->dev, devfd, "/dev/vhost-net", force);
+    r = vhost_dev_init(&net->dev, devfd, "/dev/vhost-net", VHOST_BACKEND_TYPE_KERNEL, force);
     if (r < 0) {
         goto fail;
     }

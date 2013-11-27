@@ -25,9 +25,18 @@ static int vhost_kernel_call(struct vhost_dev *dev, unsigned long int request,
 
 int vhost_call(struct vhost_dev *dev, unsigned long int request, void *arg)
 {
-    int result;
+    int result = -1;
 
-    result = vhost_kernel_call(dev, request, arg);
+    switch (dev->backend_type) {
+    case VHOST_BACKEND_TYPE_KERNEL:
+        result = vhost_kernel_call(dev, request, arg);
+        break;
+    case VHOST_BACKEND_TYPE_USER:
+        fprintf(stderr, "vhost-user not implemented\n");
+        break;
+    default:
+        fprintf(stderr, "Unknown vhost backend type\n");
+    }
 
     return result;
 }
@@ -36,7 +45,17 @@ int vhost_backend_init(struct vhost_dev *dev, const char *devpath)
 {
     int fd = -1;
 
-    fd = open(devpath, O_RDWR);
+    switch (dev->backend_type) {
+    case VHOST_BACKEND_TYPE_KERNEL:
+        fd = open(devpath, O_RDWR);
+        break;
+    case VHOST_BACKEND_TYPE_USER:
+        fprintf(stderr, "vhost-user not implemented\n");
+        break;
+    default:
+        fprintf(stderr, "Unknown vhost backend type\n");
+    }
+
     dev->control = fd;
 
     return fd;

@@ -21,7 +21,6 @@
 #include "migration/migration.h"
 #include "hw/virtio/vhost-scsi.h"
 #include "hw/virtio/vhost.h"
-#include "hw/virtio/vhost-backend.h"
 #include "hw/virtio/virtio-scsi.h"
 #include "hw/virtio/virtio-bus.h"
 
@@ -226,7 +225,8 @@ static int vhost_scsi_init(VirtIODevice *vdev)
     s->dev.vqs = g_new(struct vhost_virtqueue, s->dev.nvqs);
     s->dev.vq_index = 0;
 
-    ret = vhost_dev_init(&s->dev, vhostfd, "/dev/vhost-scsi", true);
+    ret = vhost_dev_init(&s->dev, vhostfd, "/dev/vhost-scsi",
+                         VHOST_BACKEND_TYPE_KERNEL, true);
     if (ret < 0) {
         error_report("vhost-scsi: vhost initialization failed: %s\n",
                 strerror(-ret));

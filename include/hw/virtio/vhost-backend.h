@@ -12,6 +12,13 @@
 #ifndef VHOST_BACKEND_H_
 #define VHOST_BACKEND_H_
 
+typedef enum VhostBackendType {
+    VHOST_BACKEND_TYPE_NONE = 0,
+    VHOST_BACKEND_TYPE_KERNEL = 1,
+    VHOST_BACKEND_TYPE_USER = 2,
+    VHOST_BACKEND_TYPE_MAX = 3,
+} VhostBackendType;
+
 struct vhost_dev;
 int vhost_call(struct vhost_dev *dev, unsigned long int request, void *arg);
 
