@@ -21,6 +21,7 @@
 #include "migration/migration.h"
 #include "hw/virtio/vhost-scsi.h"
 #include "hw/virtio/vhost.h"
+#include "hw/virtio/vhost-backend.h"
 #include "hw/virtio/virtio-scsi.h"
 #include "hw/virtio/virtio-bus.h"
 
@@ -32,7 +33,7 @@ static int vhost_scsi_set_endpoint(VHostSCSI *s)
 
     memset(&backend, 0, sizeof(backend));
     pstrcpy(backend.vhost_wwpn, sizeof(backend.vhost_wwpn), vs->conf.wwpn);
-    ret = ioctl(s->dev.control, VHOST_SCSI_SET_ENDPOINT, &backend);
+    ret = vhost_call(&s->dev, VHOST_SCSI_SET_ENDPOINT, &backend);
     if (ret < 0) {
         return -errno;
     }
@@ -46,7 +47,7 @@ static void vhost_scsi_clear_endpoint(VHostSCSI *s)
 
     memset(&backend, 0, sizeof(backend));
     pstrcpy(backend.vhost_wwpn, sizeof(backend.vhost_wwpn), vs->conf.wwpn);
-    ioctl(s->dev.control, VHOST_SCSI_CLEAR_ENDPOINT, &backend);
+    vhost_call(&s->dev, VHOST_SCSI_CLEAR_ENDPOINT, &backend);
 }
 
 static int vhost_scsi_start(VHostSCSI *s)
@@ -61,7 +62,7 @@ static int vhost_scsi_start(VHostSCSI *s)
         return -ENOSYS;
     }
 
-    ret = ioctl(s->dev.control, VHOST_SCSI_GET_ABI_VERSION, &abi_version);
+    ret = vhost_call(&s->dev, VHOST_SCSI_GET_ABI_VERSION, &abi_version);
     if (ret < 0) {
         return -errno;
     }
