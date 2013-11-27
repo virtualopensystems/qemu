@@ -2891,6 +2891,8 @@
 #
 # @vhostforce: #optional vhost on for non-MSIX virtio guests
 #
+# @vhostsock: #optional vhost backend socket
+#
 # @queues: #optional number of queues to be created for multiqueue capable tap
 #
 # Since 1.2
@@ -2909,6 +2911,7 @@
     '*vhostfd':    'str',
     '*vhostfds':   'str',
     '*vhostforce': 'bool',
+    '*vhostsock':  'str',
     '*queues':     'uint32'} }
 
 ##

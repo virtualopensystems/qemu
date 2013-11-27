@@ -632,7 +632,9 @@ static int net_init_tap_one(const NetdevTapOptions *tap, NetClientState *peer,
             vhostfd = -1;
         }
 
-        s->vhost_net = vhost_net_init(&s->nc, vhostfd,
+        s->vhost_net = vhost_net_init(&s->nc,
+                                      tap->has_vhostsock ? tap->vhostsock : 0,
+                                      vhostfd,
                                       tap->has_vhostforce && tap->vhostforce);
         if (!s->vhost_net) {
             error_report("vhost-net requested but could not be initialized");

@@ -91,15 +91,27 @@ static int vhost_net_get_fd(NetClientState *backend)
     }
 }
 
-struct vhost_net *vhost_net_init(NetClientState *backend, int devfd,
-                                 bool force)
+struct vhost_net *vhost_net_init(NetClientState *backend, char *vhostsock,
+                                 int devfd, bool force)
 {
     int r;
     struct vhost_net *net = g_malloc(sizeof *net);
+    const char *backend_sock = 0;
+    VhostBackendType backend_type = VHOST_BACKEND_TYPE_NONE;
+
     if (!backend) {
         fprintf(stderr, "vhost-net requires backend to be setup\n");
         goto fail;
     }
+
+    if (vhostsock && strcmp(vhostsock, VHOST_NET_DEFAULT_SOCK) != 0) {
+        backend_type = VHOST_BACKEND_TYPE_USER;
+        backend_sock = vhostsock;
+    } else {
+        backend_type = VHOST_BACKEND_TYPE_KERNEL;
+        backend_sock = VHOST_NET_DEFAULT_SOCK;
+    }
+
     r = vhost_net_get_fd(backend);
     if (r < 0) {
         goto fail;
@@ -112,7 +124,7 @@ struct vhost_net *vhost_net_init(NetClientState *backend, int devfd,
     net->dev.nvqs = 2;
     net->dev.vqs = net->vqs;
 
-    r = vhost_dev_init(&net->dev, devfd, "/dev/vhost-net", VHOST_BACKEND_TYPE_KERNEL, force);
+    r = vhost_dev_init(&net->dev, devfd, backend_sock, backend_type, force);
     if (r < 0) {
         goto fail;
     }
@@ -282,8 +294,8 @@ void vhost_net_virtqueue_mask(VHostNetState *net, VirtIODevice *dev,
     vhost_virtqueue_mask(&net->dev, dev, idx, mask);
 }
 #else
-struct vhost_net *vhost_net_init(NetClientState *backend, int devfd,
-                                 bool force)
+struct vhost_net *vhost_net_init(NetClientState *backend, char *vhostsock,
+                                 int devfd, bool force)
 {
     error_report("vhost-net support is not compiled in");
     return NULL;

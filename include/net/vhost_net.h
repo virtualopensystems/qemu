@@ -3,10 +3,13 @@
 
 #include "net/net.h"
 
+#define VHOST_NET_DEFAULT_SOCK  "/dev/vhost-net"
+
 struct vhost_net;
 typedef struct vhost_net VHostNetState;
 
-VHostNetState *vhost_net_init(NetClientState *backend, int devfd, bool force);
+VHostNetState *vhost_net_init(NetClientState *backend, char *vhostsock,
+                              int devfd, bool force);
 
 bool vhost_net_query(VHostNetState *net, VirtIODevice *dev);
 int vhost_net_start(VirtIODevice *dev, NetClientState *ncs, int total_queues);
