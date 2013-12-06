@@ -27,12 +27,13 @@
 static int vhost_scsi_set_endpoint(VHostSCSI *s)
 {
     VirtIOSCSICommon *vs = VIRTIO_SCSI_COMMON(s);
+    const VhostOps *vhost_ops = s->dev.vhost_ops;
     struct vhost_scsi_target backend;
     int ret;
 
     memset(&backend, 0, sizeof(backend));
     pstrcpy(backend.vhost_wwpn, sizeof(backend.vhost_wwpn), vs->conf.wwpn);
-    ret = ioctl(s->dev.control, VHOST_SCSI_SET_ENDPOINT, &backend);
+    ret = vhost_ops->vhost_call(&s->dev, VHOST_SCSI_SET_ENDPOINT, &backend);
     if (ret < 0) {
         return -errno;
     }
@@ -43,10 +44,11 @@ static void vhost_scsi_clear_endpoint(VHostSCSI *s)
 {
     VirtIOSCSICommon *vs = VIRTIO_SCSI_COMMON(s);
     struct vhost_scsi_target backend;
+    const VhostOps *vhost_ops = s->dev.vhost_ops;
 
     memset(&backend, 0, sizeof(backend));
     pstrcpy(backend.vhost_wwpn, sizeof(backend.vhost_wwpn), vs->conf.wwpn);
-    ioctl(s->dev.control, VHOST_SCSI_CLEAR_ENDPOINT, &backend);
+    vhost_ops->vhost_call(&s->dev, VHOST_SCSI_CLEAR_ENDPOINT, &backend);
 }
 
 static int vhost_scsi_start(VHostSCSI *s)
@@ -55,13 +57,14 @@ static int vhost_scsi_start(VHostSCSI *s)
     VirtIODevice *vdev = VIRTIO_DEVICE(s);
     BusState *qbus = BUS(qdev_get_parent_bus(DEVICE(vdev)));
     VirtioBusClass *k = VIRTIO_BUS_GET_CLASS(qbus);
+    const VhostOps *vhost_ops = s->dev.vhost_ops;
 
     if (!k->set_guest_notifiers) {
         error_report("binding does not support guest notifiers");
         return -ENOSYS;
     }
 
-    ret = ioctl(s->dev.control, VHOST_SCSI_GET_ABI_VERSION, &abi_version);
+    ret = vhost_ops->vhost_call(&s->dev, VHOST_SCSI_GET_ABI_VERSION, &abi_version);
     if (ret < 0) {
         return -errno;
     }
@@ -225,7 +228,8 @@ static int vhost_scsi_init(VirtIODevice *vdev)
     s->dev.vqs = g_new(struct vhost_virtqueue, s->dev.nvqs);
     s->dev.vq_index = 0;
 
-    ret = vhost_dev_init(&s->dev, vhostfd, "/dev/vhost-scsi", true);
+    ret = vhost_dev_init(&s->dev, vhostfd, "/dev/vhost-scsi",
+                         VHOST_BACKEND_TYPE_KERNEL, true);
     if (ret < 0) {
         error_report("vhost-scsi: vhost initialization failed: %s\n",
                 strerror(-ret));

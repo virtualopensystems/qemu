@@ -27,7 +27,6 @@
 #include <sys/socket.h>
 #include <linux/kvm.h>
 #include <fcntl.h>
-#include <sys/ioctl.h>
 #include <linux/virtio_ring.h>
 #include <netpacket/packet.h>
 #include <net/ethernet.h>
@@ -113,7 +112,7 @@ struct vhost_net *vhost_net_init(NetClientState *backend, int devfd,
     net->dev.nvqs = 2;
     net->dev.vqs = net->vqs;
 
-    r = vhost_dev_init(&net->dev, devfd, "/dev/vhost-net", force);
+    r = vhost_dev_init(&net->dev, devfd, "/dev/vhost-net", VHOST_BACKEND_TYPE_KERNEL, force);
     if (r < 0) {
         goto fail;
     }
@@ -170,7 +169,8 @@ static int vhost_net_start_one(struct vhost_net *net,
     qemu_set_fd_handler(net->backend, NULL, NULL, NULL);
     file.fd = net->backend;
     for (file.index = 0; file.index < net->dev.nvqs; ++file.index) {
-        r = ioctl(net->dev.control, VHOST_NET_SET_BACKEND, &file);
+        const VhostOps *vhost_ops = net->dev.vhost_ops;
+        r = vhost_ops->vhost_call(&net->dev, VHOST_NET_SET_BACKEND, &file);
         if (r < 0) {
             r = -errno;
             goto fail;
@@ -180,7 +180,8 @@ static int vhost_net_start_one(struct vhost_net *net,
 fail:
     file.fd = -1;
     while (file.index-- > 0) {
-        int r = ioctl(net->dev.control, VHOST_NET_SET_BACKEND, &file);
+        const VhostOps *vhost_ops = net->dev.vhost_ops;
+        int r = vhost_ops->vhost_call(&net->dev, VHOST_NET_SET_BACKEND, &file);
         assert(r >= 0);
     }
     net->nc->info->poll(net->nc, true);
@@ -201,7 +202,8 @@ static void vhost_net_stop_one(struct vhost_net *net,
     }
 
     for (file.index = 0; file.index < net->dev.nvqs; ++file.index) {
-        int r = ioctl(net->dev.control, VHOST_NET_SET_BACKEND, &file);
+        const VhostOps *vhost_ops = net->dev.vhost_ops;
+        int r = vhost_ops->vhost_call(&net->dev, VHOST_NET_SET_BACKEND, &file);
         assert(r >= 0);
     }
     net->nc->info->poll(net->nc, true);

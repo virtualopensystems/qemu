@@ -2,6 +2,7 @@
 #define VHOST_H
 
 #include "hw/hw.h"
+#include "hw/virtio/vhost-backend.h"
 #include "hw/virtio/virtio.h"
 #include "exec/memory.h"
 
@@ -48,10 +49,11 @@ struct vhost_dev {
     bool memory_changed;
     hwaddr mem_changed_start_addr;
     hwaddr mem_changed_end_addr;
+    const VhostOps *vhost_ops;
 };
 
 int vhost_dev_init(struct vhost_dev *hdev, int devfd, const char *devpath,
-                   bool force);
+                   VhostBackendType backend_type, bool force);
 void vhost_dev_cleanup(struct vhost_dev *hdev);
 bool vhost_dev_query(struct vhost_dev *hdev, VirtIODevice *vdev);
 int vhost_dev_start(struct vhost_dev *hdev, VirtIODevice *vdev);
