@@ -883,6 +883,7 @@ void qemu_mutex_unlock_ramlist(void)
 #include <sys/vfs.h>
 
 #define HUGETLBFS_MAGIC       0x958458f6
+#define MIN_HUGE_PAGE_SIZE    (2*1024*1024)
 
 static long gethugepagesize(const char *path)
 {
@@ -920,15 +921,24 @@ static void *file_ram_alloc(RAMBlock *block,
     char *c;
     void *area;
     int fd;
+    int flags;
     unsigned long hpagesize;
 
-    hpagesize = gethugepagesize(path);
-    if (!hpagesize) {
-        return NULL;
-    }
+    if (path) {
+        hpagesize = gethugepagesize(path);
 
-    if (memory < hpagesize) {
-        return NULL;
+        if (!hpagesize) {
+            return NULL ;
+        }
+
+        if (memory < hpagesize) {
+            return NULL ;
+        }
+    } else {
+        if (memory < MIN_HUGE_PAGE_SIZE) {
+            return NULL ;
+        }
+        hpagesize = MIN_HUGE_PAGE_SIZE;
     }
 
     if (kvm_enabled() && !kvm_has_sync_mmu()) {
@@ -943,20 +953,37 @@ static void *file_ram_alloc(RAMBlock *block,
             *c = '_';
     }
 
-    filename = g_strdup_printf("%s/qemu_back_mem.%s.XXXXXX", path,
-                               sanitized_name);
-    g_free(sanitized_name);
+    if (path) {
 
-    fd = mkstemp(filename);
-    if (fd < 0) {
-        perror("unable to create backing store for hugepages");
+        filename = g_strdup_printf("%s/qemu_back_mem.%s.XXXXXX", path,
+                sanitized_name);
+        g_free(sanitized_name);
+
+        fd = mkstemp(filename);
+        if (fd < 0) {
+            perror("unable to create backing store for huge");
+            g_free(filename);
+            return NULL ;
+        }
+        unlink(filename);
         g_free(filename);
+        memory = (memory + hpagesize - 1) & ~(hpagesize - 1);
+    } else if (mem_share) {
+        filename = g_strdup_printf("qemu_back_mem.%s.XXXXXX", sanitized_name);
+        g_free(sanitized_name);
+        fd = shm_open(filename, O_CREAT | O_RDWR | O_EXCL,
+                      S_IRWXU | S_IRWXG | S_IRWXO);
+        if (fd < 0) {
+            perror("unable to create backing store for shared memory");
+            g_free(filename);
+            return NULL ;
+        }
+        shm_unlink(filename);
+        g_free(filename);
+    } else {
+        fprintf(stderr, "-mem-path or -mem-share required \n");
         return NULL;
     }
-    unlink(filename);
-    g_free(filename);
-
-    memory = (memory+hpagesize-1) & ~(hpagesize-1);
 
     /*
      * ftruncate is not supported by hugetlbfs in older
@@ -967,7 +994,8 @@ static void *file_ram_alloc(RAMBlock *block,
     if (ftruncate(fd, memory))
         perror("ftruncate");
 
-    area = mmap(0, memory, PROT_READ | PROT_WRITE, MAP_PRIVATE, fd, 0);
+    flags = mem_share ? MAP_SHARED : MAP_PRIVATE;
+    area = mmap(0, memory, PROT_READ | PROT_WRITE, flags, fd, 0);
     if (area == MAP_FAILED) {
         perror("file_ram_alloc: can't mmap RAM pages");
         close(fd);
@@ -1150,13 +1178,13 @@ ram_addr_t qemu_ram_alloc_from_ptr(ram_addr_t size, void *host,
         new_block->host = host;
         new_block->flags |= RAM_PREALLOC_MASK;
     } else if (xen_enabled()) {
-        if (mem_path) {
-            fprintf(stderr, "-mem-path not supported with Xen\n");
+        if (mem_path || mem_share) {
+            fprintf(stderr, "-mem-path and -mem-share not supported with Xen\n");
             exit(1);
         }
         xen_ram_alloc(new_block->offset, size, mr);
     } else {
-        if (mem_path) {
+        if (mem_path || mem_share) {
             if (phys_mem_alloc != qemu_anon_ram_alloc) {
                 /*
                  * file_ram_alloc() needs to allocate just like
@@ -1164,7 +1192,8 @@ ram_addr_t qemu_ram_alloc_from_ptr(ram_addr_t size, void *host,
                  * a hook there.
                  */
                 fprintf(stderr,
-                        "-mem-path not supported with this accelerator\n");
+                        "-mem-path and -mem-share "
+                        "not supported with this accelerator\n");
                 exit(1);
             }
             new_block->host = file_ram_alloc(new_block, size, mem_path);
