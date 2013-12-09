@@ -3009,11 +3009,24 @@
     'hubid':     'int32' } }
 
 ##
+# @NetdevVhostUserOptions
+#
+# Vhost-user network backend
+#
+# @file: control socket path
+#
+# Since 2.0
+##
+{ 'type': 'NetdevVhostUserOptions',
+  'data': {
+    '*file': 'str' } }
+
+##
 # @NetClientOptions
 #
 # A discriminated record of network device traits.
 #
-# Since 1.2
+# Since 2.0
 ##
 { 'union': 'NetClientOptions',
   'data': {
@@ -3025,7 +3038,8 @@
     'vde':      'NetdevVdeOptions',
     'dump':     'NetdevDumpOptions',
     'bridge':   'NetdevBridgeOptions',
-    'hubport':  'NetdevHubPortOptions' } }
+    'hubport':  'NetdevHubPortOptions',
+    'vhost-user': 'NetdevVhostUserOptions' } }
 
 ##
 # @NetLegacy

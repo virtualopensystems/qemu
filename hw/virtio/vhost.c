@@ -14,7 +14,6 @@
  */
 
 #include "hw/virtio/vhost.h"
-#include "hw/virtio/vhost-backend.h"
 #include "hw/hw.h"
 #include "qemu/atomic.h"
 #include "qemu/range.h"
