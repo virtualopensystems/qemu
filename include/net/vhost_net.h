@@ -2,11 +2,22 @@
 #define VHOST_NET_H
 
 #include "net/net.h"
+#include "hw/virtio/vhost-backend.h"
+
+#define VHOST_NET_DEFAULT_PATH  "/dev/vhost-net"
 
 struct vhost_net;
 typedef struct vhost_net VHostNetState;
 
-VHostNetState *vhost_net_init(NetClientState *backend, int devfd, bool force);
+typedef struct VhostNetOptions {
+    VhostBackendType backend_type;
+    NetClientState *net_backend;
+    const char *devpath;
+    int devfd;
+    bool force;
+} VhostNetOptions;
+
+struct vhost_net *vhost_net_init(VhostNetOptions *options);
 
 bool vhost_net_query(VHostNetState *net, VirtIODevice *dev);
 int vhost_net_start(VirtIODevice *dev, NetClientState *ncs, int total_queues);
