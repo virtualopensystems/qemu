@@ -105,14 +105,7 @@ static void virtio_net_vhost_status(VirtIONet *n, uint8_t status)
     NetClientState *nc = qemu_get_queue(n->nic);
     int queues = n->multiqueue ? n->max_queues : 1;
 
-    if (!nc->peer) {
-        return;
-    }
-    if (nc->peer->info->type != NET_CLIENT_OPTIONS_KIND_TAP) {
-        return;
-    }
-
-    if (!tap_get_vhost_net(nc->peer)) {
+    if (!get_vhost_net(nc->peer)) {
         return;
     }
 
@@ -122,7 +115,7 @@ static void virtio_net_vhost_status(VirtIONet *n, uint8_t status)
     }
     if (!n->vhost_started) {
         int r;
-        if (!vhost_net_query(tap_get_vhost_net(nc->peer), vdev)) {
+        if (!vhost_net_query(get_vhost_net(nc->peer), vdev)) {
             return;
         }
         n->vhost_started = 1;
@@ -325,11 +318,16 @@ static void peer_test_vnet_hdr(VirtIONet *n)
         return;
     }
 
-    if (nc->peer->info->type != NET_CLIENT_OPTIONS_KIND_TAP) {
-        return;
+    switch (nc->peer->info->type) {
+    case NET_CLIENT_OPTIONS_KIND_TAP:
+        n->has_vnet_hdr = tap_has_vnet_hdr(nc->peer);
+        break;
+    case NET_CLIENT_OPTIONS_KIND_VHOST_USER:
+        n->has_vnet_hdr = 0;
+        break;
+    default:
+        break;
     }
-
-    n->has_vnet_hdr = tap_has_vnet_hdr(nc->peer);
 }
 
 static int peer_has_vnet_hdr(VirtIONet *n)
@@ -437,13 +435,10 @@ static uint32_t virtio_net_get_features(VirtIODevice *vdev, uint32_t features)
         features &= ~(0x1 << VIRTIO_NET_F_HOST_UFO);
     }
 
-    if (!nc->peer || nc->peer->info->type != NET_CLIENT_OPTIONS_KIND_TAP) {
+    if (!get_vhost_net(nc->peer)) {
         return features;
     }
-    if (!tap_get_vhost_net(nc->peer)) {
-        return features;
-    }
-    return vhost_net_get_features(tap_get_vhost_net(nc->peer), features);
+    return vhost_net_get_features(get_vhost_net(nc->peer), features);
 }
 
 static uint32_t virtio_net_bad_features(VirtIODevice *vdev)
@@ -507,13 +502,10 @@ static void virtio_net_set_features(VirtIODevice *vdev, uint32_t features)
     for (i = 0;  i < n->max_queues; i++) {
         NetClientState *nc = qemu_get_subqueue(n->nic, i);
 
-        if (!nc->peer || nc->peer->info->type != NET_CLIENT_OPTIONS_KIND_TAP) {
+        if (!get_vhost_net(nc->peer)) {
             continue;
         }
-        if (!tap_get_vhost_net(nc->peer)) {
-            continue;
-        }
-        vhost_net_ack_features(tap_get_vhost_net(nc->peer), features);
+        vhost_net_ack_features(get_vhost_net(nc->peer), features);
     }
 }
 
@@ -1443,7 +1435,7 @@ static bool virtio_net_guest_notifier_pending(VirtIODevice *vdev, int idx)
     VirtIONet *n = VIRTIO_NET(vdev);
     NetClientState *nc = qemu_get_subqueue(n->nic, vq2q(idx));
     assert(n->vhost_started);
-    return vhost_net_virtqueue_pending(tap_get_vhost_net(nc->peer), idx);
+    return vhost_net_virtqueue_pending(get_vhost_net(nc->peer), idx);
 }
 
 static void virtio_net_guest_notifier_mask(VirtIODevice *vdev, int idx,
@@ -1452,7 +1444,7 @@ static void virtio_net_guest_notifier_mask(VirtIODevice *vdev, int idx,
     VirtIONet *n = VIRTIO_NET(vdev);
     NetClientState *nc = qemu_get_subqueue(n->nic, vq2q(idx));
     assert(n->vhost_started);
-    vhost_net_virtqueue_mask(tap_get_vhost_net(nc->peer),
+    vhost_net_virtqueue_mask(get_vhost_net(nc->peer),
                              vdev, idx, mask);
 }
 

@@ -1422,6 +1422,8 @@ DEF("net", HAS_ARG, QEMU_OPTION_net,
     "                VALE port (created on the fly) called 'name' ('nmname' is name of the \n"
     "                netmap device, defaults to '/dev/netmap')\n"
 #endif
+    "-net vhost-user,file=name\n"
+    "                connect to a unix domain socket implementing vhost-user backend\n"
     "-net dump[,vlan=n][,file=f][,len=n]\n"
     "                dump traffic on vlan 'n' to file 'f' (max n bytes per packet)\n"
     "-net none       use it alone to have zero network devices. If no -net option\n"
@@ -1439,6 +1441,7 @@ DEF("netdev", HAS_ARG, QEMU_OPTION_netdev,
 #ifdef CONFIG_NETMAP
     "netmap|"
 #endif
+    "vhost-user|"
     "socket|"
     "hubport],id=str[,option][,option][,...]\n", QEMU_ARCH_ALL)
 STEXI
