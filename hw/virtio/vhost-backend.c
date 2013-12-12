@@ -168,6 +168,10 @@ static int vhost_user_call(struct vhost_dev *dev, unsigned long int request,
 
     assert(dev->vhost_ops->backend_type == VHOST_BACKEND_TYPE_USER);
 
+    if (fd < 0) {
+        return 0;
+    }
+
     msg.request = vhost_user_request_translate(request);
     msg.flags = 0;
 
@@ -251,7 +255,22 @@ static int vhost_user_call(struct vhost_dev *dev, unsigned long int request,
         }
     }
 
+    /* mark the backend non operational */
+    if (result < 0) {
+        dev->control = -1;
+        return 0;
+    }
+
     return result;
+}
+
+static int vhost_user_status(struct vhost_dev *dev)
+{
+    uint64_t features = 0;
+
+    vhost_user_call(dev, VHOST_GET_FEATURES, &features);
+
+    return (dev->control >= 0);
 }
 
 static int vhost_user_init(struct vhost_dev *dev, const char *devpath)
@@ -295,6 +314,7 @@ static int vhost_user_cleanup(struct vhost_dev *dev)
 static const VhostOps user_ops = {
         .backend_type = VHOST_BACKEND_TYPE_USER,
         .vhost_call = vhost_user_call,
+        .vhost_status = vhost_user_status,
         .vhost_backend_init = vhost_user_init,
         .vhost_backend_cleanup = vhost_user_cleanup
 };
@@ -327,6 +347,7 @@ static int vhost_kernel_cleanup(struct vhost_dev *dev)
 static const VhostOps kernel_ops = {
         .backend_type = VHOST_BACKEND_TYPE_KERNEL,
         .vhost_call = vhost_kernel_call,
+        .vhost_status = 0,
         .vhost_backend_init = vhost_kernel_init,
         .vhost_backend_cleanup = vhost_kernel_cleanup
 };
