@@ -237,6 +237,15 @@ STEXI
 Preallocate memory when using -mem-path.
 ETEXI
 
+DEF("mem-share", 0, QEMU_OPTION_mem_share,
+    "-mem-share   share guest memory (implies -mem-prealloc)\n",
+    QEMU_ARCH_ALL)
+STEXI
+@item -mem-share
+@findex -mem-share
+Allocate guest RAM as a shared memory object.
+ETEXI
+
 DEF("k", HAS_ARG, QEMU_OPTION_k,
     "-k language     use keyboard layout (for example 'fr' for French)\n",
     QEMU_ARCH_ALL)

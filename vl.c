@@ -189,6 +189,7 @@ const char* keyboard_layout = NULL;
 ram_addr_t ram_size;
 const char *mem_path = NULL;
 int mem_prealloc = 0; /* force preallocation of physical target memory */
+int mem_share = 0; /* allocate shared memory */
 int nb_nics;
 NICInfo nd_table[MAX_NICS];
 int autostart;
@@ -3210,6 +3211,10 @@ int main(int argc, char **argv, char **envp)
                 mem_path = optarg;
                 break;
             case QEMU_OPTION_mem_prealloc:
+                mem_prealloc = 1;
+                break;
+            case QEMU_OPTION_mem_share:
+                mem_share = 1;
                 mem_prealloc = 1;
                 break;
             case QEMU_OPTION_d:
