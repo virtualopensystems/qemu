@@ -9,4 +9,6 @@
 #define ARM_SYSCTL_GPIO_MMC_WPROT 0
 #define ARM_SYSCTL_GPIO_MMC_CARDIN 1
 
+void pl330_vfio_legacy_init(void);
+
 #endif

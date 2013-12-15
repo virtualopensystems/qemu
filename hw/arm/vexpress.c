@@ -370,6 +370,7 @@ static void a15_daughterboard_init(const VEDBoardInfo *daughterboard,
     memory_region_add_subregion(sysmem, 0x2e000000, sram);
 
     /* 0x7ffb0000: DMA330 DMA controller: not modelled */
+    pl330_vfio_legacy_init();
     /* 0x7ffd0000: PL354 static memory controller: not modelled */
 }
 
