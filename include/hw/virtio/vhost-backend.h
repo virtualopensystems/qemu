@@ -22,12 +22,14 @@ struct vhost_dev;
 
 typedef int (*vhost_call)(struct vhost_dev *dev, unsigned long int request,
              void *arg);
+typedef int (*vhost_status)(struct vhost_dev *dev);
 typedef int (*vhost_backend_init)(struct vhost_dev *dev, const char *devpath);
 typedef int (*vhost_backend_cleanup)(struct vhost_dev *dev);
 
 typedef struct VhostOps {
     VhostBackendType backend_type;
     vhost_call vhost_call;
+    vhost_status vhost_status;
     vhost_backend_init vhost_backend_init;
     vhost_backend_cleanup vhost_backend_cleanup;
 } VhostOps;
