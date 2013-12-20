@@ -15,6 +15,7 @@
 
 #include "net/net.h"
 #include "net/tap.h"
+#include "net/vhost-user.h"
 
 #include "hw/virtio/virtio-net.h"
 #include "net/vhost_net.h"
@@ -174,15 +175,20 @@ static int vhost_net_start_one(struct vhost_net *net,
         goto fail_start;
     }
 
-    net->nc->info->poll(net->nc, false);
-    qemu_set_fd_handler(net->backend, NULL, NULL, NULL);
-    file.fd = net->backend;
-    for (file.index = 0; file.index < net->dev.nvqs; ++file.index) {
-        const VhostOps *vhost_ops = net->dev.vhost_ops;
-        r = vhost_ops->vhost_call(&net->dev, VHOST_NET_SET_BACKEND, &file);
-        if (r < 0) {
-            r = -errno;
-            goto fail;
+    if (net->nc->info->poll) {
+        net->nc->info->poll(net->nc, false);
+    }
+
+    if (net->nc->info->type == NET_CLIENT_OPTIONS_KIND_TAP) {
+        qemu_set_fd_handler(net->backend, NULL, NULL, NULL);
+        file.fd = net->backend;
+        for (file.index = 0; file.index < net->dev.nvqs; ++file.index) {
+            const VhostOps *vhost_ops = net->dev.vhost_ops;
+            r = vhost_ops->vhost_call(&net->dev, VHOST_NET_SET_BACKEND, &file);
+            if (r < 0) {
+                r = -errno;
+                goto fail;
+            }
         }
     }
     return 0;
@@ -193,7 +199,9 @@ fail:
         int r = vhost_ops->vhost_call(&net->dev, VHOST_NET_SET_BACKEND, &file);
         assert(r >= 0);
     }
-    net->nc->info->poll(net->nc, true);
+    if (net->nc->info->poll) {
+        net->nc->info->poll(net->nc, true);
+    }
     vhost_dev_stop(&net->dev, dev);
 fail_start:
     vhost_dev_disable_notifiers(&net->dev, dev);
@@ -215,7 +223,9 @@ static void vhost_net_stop_one(struct vhost_net *net,
         int r = vhost_ops->vhost_call(&net->dev, VHOST_NET_SET_BACKEND, &file);
         assert(r >= 0);
     }
-    net->nc->info->poll(net->nc, true);
+    if (net->nc->info->poll) {
+        net->nc->info->poll(net->nc, true);
+    }
     vhost_dev_stop(&net->dev, dev);
     vhost_dev_disable_notifiers(&net->dev, dev);
 }
@@ -235,7 +245,7 @@ int vhost_net_start(VirtIODevice *dev, NetClientState *ncs,
     }
 
     for (i = 0; i < total_queues; i++) {
-        r = vhost_net_start_one(tap_get_vhost_net(ncs[i].peer), dev, i * 2);
+        r = vhost_net_start_one(get_vhost_net(ncs[i].peer), dev, i * 2);
 
         if (r < 0) {
             goto err;
@@ -252,7 +262,7 @@ int vhost_net_start(VirtIODevice *dev, NetClientState *ncs,
 
 err:
     while (--i >= 0) {
-        vhost_net_stop_one(tap_get_vhost_net(ncs[i].peer), dev);
+        vhost_net_stop_one(get_vhost_net(ncs[i].peer), dev);
     }
     return r;
 }
@@ -273,7 +283,7 @@ void vhost_net_stop(VirtIODevice *dev, NetClientState *ncs,
     assert(r >= 0);
 
     for (i = 0; i < total_queues; i++) {
-        vhost_net_stop_one(tap_get_vhost_net(ncs[i].peer), dev);
+        vhost_net_stop_one(get_vhost_net(ncs[i].peer), dev);
     }
 }
 
@@ -293,6 +303,29 @@ void vhost_net_virtqueue_mask(VHostNetState *net, VirtIODevice *dev,
 {
     vhost_virtqueue_mask(&net->dev, dev, idx, mask);
 }
+
+VHostNetState *get_vhost_net(NetClientState *nc)
+{
+    VHostNetState *vhost_net = 0;
+
+    if (!nc) {
+        return 0;
+    }
+
+    switch (nc->info->type) {
+    case NET_CLIENT_OPTIONS_KIND_TAP:
+        vhost_net = tap_get_vhost_net(nc);
+        break;
+    case NET_CLIENT_OPTIONS_KIND_VHOST_USER:
+        vhost_net = vhost_user_get_vhost_net(nc);
+        break;
+    default:
+        break;
+    }
+
+    return vhost_net;
+}
+
 #else
 struct vhost_net *vhost_net_init(VhostNetOptions *options)
 {
@@ -337,5 +370,10 @@ bool vhost_net_virtqueue_pending(VHostNetState *net, int idx)
 void vhost_net_virtqueue_mask(VHostNetState *net, VirtIODevice *dev,
                               int idx, bool mask)
 {
+}
+
+VHostNetState *get_vhost_net(NetClientState *nc)
+{
+    return 0;
 }
 #endif

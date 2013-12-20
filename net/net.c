@@ -734,6 +734,7 @@ static int (* const net_client_init_fun[NET_CLIENT_OPTIONS_KIND_MAX])(
         [NET_CLIENT_OPTIONS_KIND_BRIDGE]    = net_init_bridge,
 #endif
         [NET_CLIENT_OPTIONS_KIND_HUBPORT]   = net_init_hubport,
+        [NET_CLIENT_OPTIONS_KIND_VHOST_USER] = net_init_vhost_user,
 };
 
 
@@ -767,6 +768,7 @@ static int net_client_init1(const void *object, int is_netdev, Error **errp)
         case NET_CLIENT_OPTIONS_KIND_BRIDGE:
 #endif
         case NET_CLIENT_OPTIONS_KIND_HUBPORT:
+        case NET_CLIENT_OPTIONS_KIND_VHOST_USER:
             break;
 
         default:
