@@ -19,6 +19,7 @@
 #include <linux/vhost.h>
 
 #define VHOST_MEMORY_MAX_NREGIONS    8
+#define VHOST_USER_SOCKTO            (1000) /* msec */
 
 typedef enum VhostUserRequest {
     VHOST_USER_NONE = 0,
@@ -65,6 +66,40 @@ typedef struct VhostUserMsg {
         VhostUserMemory memory;
     };
 } VhostUserMsg;
+
+static unsigned long int ioctl_to_vhost_user_request[VHOST_USER_MAX] = {
+    -1, /* VHOST_USER_NONE */
+    VHOST_GET_FEATURES, /* VHOST_USER_GET_FEATURES */
+    VHOST_SET_FEATURES, /* VHOST_USER_SET_FEATURES */
+    VHOST_SET_OWNER, /* VHOST_USER_SET_OWNER */
+    VHOST_RESET_OWNER, /* VHOST_USER_RESET_OWNER */
+    VHOST_SET_MEM_TABLE, /* VHOST_USER_SET_MEM_TABLE */
+    VHOST_SET_LOG_BASE, /* VHOST_USER_SET_LOG_BASE */
+    VHOST_SET_LOG_FD, /* VHOST_USER_SET_LOG_FD */
+    VHOST_SET_VRING_NUM, /* VHOST_USER_SET_VRING_NUM */
+    VHOST_SET_VRING_ADDR, /* VHOST_USER_SET_VRING_ADDR */
+    VHOST_SET_VRING_BASE, /* VHOST_USER_SET_VRING_BASE */
+    VHOST_GET_VRING_BASE, /* VHOST_USER_GET_VRING_BASE */
+    VHOST_SET_VRING_KICK, /* VHOST_USER_SET_VRING_KICK */
+    VHOST_SET_VRING_CALL, /* VHOST_USER_SET_VRING_CALL */
+    VHOST_SET_VRING_ERR, /* VHOST_USER_SET_VRING_ERR */
+    VHOST_NET_SET_BACKEND /* VHOST_USER_NET_SET_BACKEND */
+};
+
+static int vhost_user_cleanup(struct vhost_dev *dev);
+
+static VhostUserRequest vhost_user_request_translate(unsigned long int request)
+{
+    VhostUserRequest idx;
+
+    for (idx = 0; idx < VHOST_USER_MAX; idx++) {
+        if (ioctl_to_vhost_user_request[idx] == request) {
+            break;
+        }
+    }
+
+    return (idx == VHOST_USER_MAX) ? VHOST_USER_NONE : idx;
+}
 
 static int vhost_user_recv(int fd, VhostUserMsg *msg)
 {
@@ -129,13 +164,74 @@ static int vhost_user_call(struct vhost_dev *dev, unsigned long int request,
 {
     int fd = dev->control;
     VhostUserMsg msg;
+    RAMBlock *block = 0;
     int result = 0, need_reply = 0;
     int fds[VHOST_MEMORY_MAX_NREGIONS];
     size_t fd_num = 0;
 
     assert(dev->vhost_ops->backend_type == VHOST_BACKEND_TYPE_USER);
 
+    msg.request = vhost_user_request_translate(request);
+    msg.flags = 0;
+
     switch (request) {
+    case VHOST_GET_FEATURES:
+    case VHOST_GET_VRING_BASE:
+        need_reply = 1;
+        break;
+
+    case VHOST_SET_FEATURES:
+    case VHOST_SET_LOG_BASE:
+        msg.u64 = *((uint64_t *) arg);
+        break;
+
+    case VHOST_SET_OWNER:
+    case VHOST_RESET_OWNER:
+        break;
+
+    case VHOST_SET_MEM_TABLE:
+        QTAILQ_FOREACH(block, &ram_list.blocks, next)
+        {
+            if (block->fd > 0) {
+                msg.memory.regions[fd_num].userspace_addr = (__u64) block->host;
+                msg.memory.regions[fd_num].memory_size = block->length;
+                msg.memory.regions[fd_num].guest_phys_addr = block->offset;
+                fds[fd_num++] = block->fd;
+            }
+        }
+
+        msg.memory.nregions = fd_num;
+
+        if (!fd_num) {
+            fprintf(stderr, "Failed initializing vhost-user memory map\n"
+                    "consider -mem-path and -mem-prealloc options\n");
+            return -1;
+        }
+        break;
+
+    case VHOST_SET_LOG_FD:
+        msg.fd = *((int *) arg);
+        break;
+
+    case VHOST_SET_VRING_NUM:
+    case VHOST_SET_VRING_BASE:
+        memcpy(&msg.state, arg, sizeof(struct vhost_vring_state));
+        break;
+
+    case VHOST_SET_VRING_ADDR:
+        memcpy(&msg.addr, arg, sizeof(struct vhost_vring_addr));
+        break;
+
+    case VHOST_SET_VRING_KICK:
+    case VHOST_SET_VRING_CALL:
+    case VHOST_SET_VRING_ERR:
+    case VHOST_NET_SET_BACKEND:
+        memcpy(&msg.file, arg, sizeof(struct vhost_vring_file));
+        if (msg.file.fd > 0) {
+            fds[0] = msg.file.fd;
+            fd_num = 1;
+        }
+        break;
     default:
         fprintf(stderr, "vhost-user trying to send unhandled ioctl\n");
         return -1;
@@ -148,7 +244,11 @@ static int vhost_user_call(struct vhost_dev *dev, unsigned long int request,
         result = vhost_user_recv(fd, &msg);
         if (!result) {
             switch (request) {
-            default:
+            case VHOST_GET_FEATURES:
+                *((uint64_t *) arg) = msg.u64;
+                break;
+            case VHOST_GET_VRING_BASE:
+                memcpy(arg, &msg.state, sizeof(struct vhost_vring_state));
                 break;
             }
         }
@@ -161,6 +261,7 @@ static int vhost_user_init(struct vhost_dev *dev, const char *devpath)
 {
     int fd = -1;
     struct sockaddr_un un;
+    struct timeval tv;
     size_t len;
 
     assert(dev->vhost_ops->backend_type == VHOST_BACKEND_TYPE_USER);
@@ -180,19 +281,49 @@ static int vhost_user_init(struct vhost_dev *dev, const char *devpath)
     /* Connect */
     if (connect(fd, (struct sockaddr *) &un, len) == -1) {
         perror("connect");
-        return -1;
+        goto fail;
     }
 
+    /* Set socket options */
+    tv.tv_sec = VHOST_USER_SOCKTO/1000;
+    tv.tv_usec = (VHOST_USER_SOCKTO%1000)*1000*1000;
+
+    if (setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(struct timeval))
+            == -1) {
+        perror("setsockopt SO_SNDTIMEO");
+        goto fail;
+    }
+
+    if (setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(struct timeval))
+            == -1) {
+        perror("setsockopt SO_RCVTIMEO");
+        goto fail;
+    }
+
+    /* cleanup if there is previous connection left */
+    if (dev->control >= 0) {
+        vhost_user_cleanup(dev);
+    }
     dev->control = fd;
 
     return fd;
+
+fail:
+    close(fd);
+    return -1;
+
 }
 
 static int vhost_user_cleanup(struct vhost_dev *dev)
 {
+    int r;
+
     assert(dev->vhost_ops->backend_type == VHOST_BACKEND_TYPE_USER);
 
-    return close(dev->control);
+    r = close(dev->control);
+    dev->control = -1;
+
+    return r;
 }
 
 static const VhostOps user_ops = {
