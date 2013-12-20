@@ -957,6 +957,7 @@ void qemu_mutex_unlock_ramlist(void)
 #include <sys/vfs.h>
 
 #define HUGETLBFS_MAGIC       0x958458f6
+#define MIN_HUGE_PAGE_SIZE    (2*1024*1024)
 
 static long gethugepagesize(const char *path)
 {
@@ -972,8 +973,9 @@ static long gethugepagesize(const char *path)
         return 0;
     }
 
-    if (fs.f_type != HUGETLBFS_MAGIC)
-        fprintf(stderr, "Warning: path not on HugeTLBFS: %s\n", path);
+    if (fs.f_type != HUGETLBFS_MAGIC) {
+        return 0;
+    }
 
     return fs.f_bsize;
 }
@@ -994,11 +996,14 @@ static void *file_ram_alloc(RAMBlock *block,
     char *c;
     void *area;
     int fd;
+    int flags;
     unsigned long hpagesize;
+    QemuOpts *opts;
+    unsigned int mem_prealloc = 0, mem_share = 0, mem_unlink = 1;
 
     hpagesize = gethugepagesize(path);
     if (!hpagesize) {
-        return NULL;
+        hpagesize = MIN_HUGE_PAGE_SIZE;
     }
 
     if (memory < hpagesize) {
@@ -1010,6 +1015,14 @@ static void *file_ram_alloc(RAMBlock *block,
         return NULL;
     }
 
+    /* Fill config options */
+    opts = qemu_opts_find(qemu_find_opts("mem-path"), NULL);
+    if (opts) {
+        mem_prealloc = qemu_opt_get_bool(opts, "prealloc", 0);
+        mem_share = qemu_opt_get_bool(opts, "share", 0);
+        mem_unlink = qemu_opt_get_bool(opts, "unlink", 1);
+    }
+
     /* Make name safe to use with mkstemp by replacing '/' with '_'. */
     sanitized_name = g_strdup(block->mr->name);
     for (c = sanitized_name; *c != '\0'; c++) {
@@ -1017,20 +1030,28 @@ static void *file_ram_alloc(RAMBlock *block,
             *c = '_';
     }
 
-    filename = g_strdup_printf("%s/qemu_back_mem.%s.XXXXXX", path,
-                               sanitized_name);
+    filename = g_strdup_printf("%s/qemu_back_mem.%s%s", path, sanitized_name,
+                               (mem_unlink) ? ".XXXXXX" : "");
     g_free(sanitized_name);
 
-    fd = mkstemp(filename);
+    if (mem_unlink) {
+        fd = mkstemp(filename);
+    } else {
+        fd = open(filename, O_CREAT | O_RDWR | O_EXCL,
+                S_IRWXU | S_IRWXG | S_IRWXO);
+    }
     if (fd < 0) {
-        perror("unable to create backing store for hugepages");
+        perror("unable to create guest RAM backing store");
         g_free(filename);
         return NULL;
     }
-    unlink(filename);
+
+    if (mem_unlink) {
+        unlink(filename);
+    }
     g_free(filename);
 
-    memory = (memory+hpagesize-1) & ~(hpagesize-1);
+    memory = (memory + hpagesize - 1) & ~(hpagesize - 1);
 
     /*
      * ftruncate is not supported by hugetlbfs in older
@@ -1041,7 +1062,8 @@ static void *file_ram_alloc(RAMBlock *block,
     if (ftruncate(fd, memory))
         perror("ftruncate");
 
-    area = mmap(0, memory, PROT_READ | PROT_WRITE, MAP_PRIVATE, fd, 0);
+    flags = mem_share ? MAP_SHARED : MAP_PRIVATE;
+    area = mmap(0, memory, PROT_READ | PROT_WRITE, flags, fd, 0);
     if (area == MAP_FAILED) {
         perror("file_ram_alloc: can't mmap RAM pages");
         close(fd);
@@ -1211,10 +1233,17 @@ ram_addr_t qemu_ram_alloc_from_ptr(ram_addr_t size, void *host,
                                    MemoryRegion *mr)
 {
     RAMBlock *block, *new_block;
+    QemuOpts *opts;
+    const char *mem_path = 0;
 
     size = TARGET_PAGE_ALIGN(size);
     new_block = g_malloc0(sizeof(*new_block));
     new_block->fd = -1;
+
+    opts = qemu_opts_find(qemu_find_opts("mem-path"), NULL);
+    if (opts) {
+        mem_path = qemu_opt_get(opts, "path");
+    }
 
     /* This assumes the iothread lock is taken here too.  */
     qemu_mutex_lock_ramlist();
@@ -1348,6 +1377,14 @@ void qemu_ram_remap(ram_addr_t addr, ram_addr_t length)
     ram_addr_t offset;
     int flags;
     void *area, *vaddr;
+    QemuOpts *opts;
+    unsigned int mem_prealloc = 0;
+
+    /* Fill config options */
+    opts = qemu_opts_find(qemu_find_opts("mem-path"), NULL);
+    if (opts) {
+        mem_prealloc = qemu_opt_get_bool(opts, "prealloc", 0);
+    }
 
     QTAILQ_FOREACH(block, &ram_list.blocks, next) {
         offset = addr - block->offset;
