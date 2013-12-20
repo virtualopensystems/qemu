@@ -14,7 +14,8 @@
 typedef enum VhostBackendType {
     VHOST_BACKEND_TYPE_NONE = 0,
     VHOST_BACKEND_TYPE_KERNEL = 1,
-    VHOST_BACKEND_TYPE_MAX = 2,
+    VHOST_BACKEND_TYPE_USER = 2,
+    VHOST_BACKEND_TYPE_MAX = 3,
 } VhostBackendType;
 
 struct vhost_dev;
