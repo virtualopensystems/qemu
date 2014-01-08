@@ -16,6 +16,38 @@
 #include <unistd.h>
 #include <sys/ioctl.h>
 
+static int vhost_user_call(struct vhost_dev *dev, unsigned long int request,
+        void *arg)
+{
+    assert(dev->vhost_ops->backend_type == VHOST_BACKEND_TYPE_USER);
+    error_report("vhost_user_call not implemented\n");
+
+    return -1;
+}
+
+static int vhost_user_init(struct vhost_dev *dev, const char *devpath)
+{
+    assert(dev->vhost_ops->backend_type == VHOST_BACKEND_TYPE_USER);
+    error_report("vhost_user_init not implemented\n");
+
+    return -1;
+}
+
+static int vhost_user_cleanup(struct vhost_dev *dev)
+{
+    assert(dev->vhost_ops->backend_type == VHOST_BACKEND_TYPE_USER);
+    error_report("vhost_user_cleanup not implemented\n");
+
+    return -1;
+}
+
+static const VhostOps user_ops = {
+        .backend_type = VHOST_BACKEND_TYPE_USER,
+        .vhost_call = vhost_user_call,
+        .vhost_backend_init = vhost_user_init,
+        .vhost_backend_cleanup = vhost_user_cleanup
+};
+
 static int vhost_kernel_call(struct vhost_dev *dev, unsigned long int request,
                              void *arg)
 {
@@ -55,6 +87,9 @@ int vhost_set_backend_type(struct vhost_dev *dev, VhostBackendType backend_type)
     switch (backend_type) {
     case VHOST_BACKEND_TYPE_KERNEL:
         dev->vhost_ops = &kernel_ops;
+        break;
+    case VHOST_BACKEND_TYPE_USER:
+        dev->vhost_ops = &user_ops;
         break;
     default:
         error_report("Unknown vhost backend type\n");
