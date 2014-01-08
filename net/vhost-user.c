@@ -12,12 +12,16 @@
 #include "net/vhost_net.h"
 #include "net/vhost-user.h"
 #include "qemu/error-report.h"
+#include "qemu/timer.h"
 
 typedef struct VhostUserState {
     NetClientState nc;
     VHostNetState *vhost_net;
     char *devpath;
 } VhostUserState;
+
+static QEMUTimer *vhost_user_timer;
+#define VHOST_USER_TIMEOUT  (1*1000)
 
 VHostNetState *vhost_user_get_vhost_net(NetClientState *nc)
 {
@@ -29,6 +33,11 @@ VHostNetState *vhost_user_get_vhost_net(NetClientState *nc)
 static int vhost_user_running(VhostUserState *s)
 {
     return (s->vhost_net) ? 1 : 0;
+}
+
+static int vhost_user_link_status(VhostUserState *s)
+{
+    return (!s->nc.link_down) && vhost_net_link_status(s->vhost_net);
 }
 
 static int vhost_user_start(VhostUserState *s)
@@ -57,6 +66,48 @@ static void vhost_user_stop(VhostUserState *s)
     }
 
     s->vhost_net = 0;
+}
+
+static void vhost_user_timer_handler(void *opaque)
+{
+    VhostUserState *s = opaque;
+    int link_down = 0;
+
+    if (vhost_user_running(s)) {
+        if (!vhost_user_link_status(s)) {
+            link_down = 1;
+        }
+    } else {
+        vhost_user_start(s);
+        if (!vhost_user_running(s)) {
+            link_down = 1;
+        }
+    }
+
+    if (link_down != s->nc.link_down) {
+
+        s->nc.link_down = link_down;
+
+        if (s->nc.peer) {
+            s->nc.peer->link_down = link_down;
+        }
+
+        if (s->nc.info->link_status_changed) {
+            s->nc.info->link_status_changed(&s->nc);
+        }
+
+        if (s->nc.peer && s->nc.peer->info->link_status_changed) {
+            s->nc.peer->info->link_status_changed(s->nc.peer);
+        }
+
+        if (link_down) {
+            vhost_user_stop(s);
+        }
+    }
+
+    /* reschedule */
+    timer_mod(vhost_user_timer,
+              qemu_clock_get_ms(QEMU_CLOCK_REALTIME) + VHOST_USER_TIMEOUT);
 }
 
 static void vhost_user_cleanup(NetClientState *nc)
@@ -92,6 +143,11 @@ static int net_vhost_user_init(NetClientState *peer, const char *device,
     s->devpath = g_strdup(filename);
 
     r = vhost_user_start(s);
+
+    vhost_user_timer = timer_new_ms(QEMU_CLOCK_REALTIME,
+            vhost_user_timer_handler, s);
+    timer_mod(vhost_user_timer,
+            qemu_clock_get_ms(QEMU_CLOCK_REALTIME) + VHOST_USER_TIMEOUT);
 
     return r;
 }
