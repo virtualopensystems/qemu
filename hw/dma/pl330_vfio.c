@@ -186,10 +186,7 @@ static void find_efdnum(gpointer key, gpointer val, gpointer irqnum_efdnum)
 {
 	if(*(int *)val == ((struct efdnum_irqnum *)irqnum_efdnum)->irqnum) {
 		((struct efdnum_irqnum *)irqnum_efdnum)->efdnum = *(int *)key;
-        	PL330_VFIO_DPRINTF("trovato!key: %d, val: %d\n", *(int *)key, *(int *)val);
 	}
-	else
-        	PL330_VFIO_DPRINTF("non trovato!key: %d, val: %d\n", *(int *)key, *(int *)val);
 }
 
 /*
@@ -546,9 +543,7 @@ static int get_dst_addr(uint32_t cmds_addr, hwaddr *src, hwaddr *dst) {
 	
 	if(!not_found) {
 		_src = *((uint32_t *)(&ptr[i + 2]));
-		PL330_VFIO_DPRINTF("src address found\n");
 	} else {
-		PL330_VFIO_DPRINTF("src address not found\n");
 		return -1;
 	}
 
@@ -563,9 +558,7 @@ static int get_dst_addr(uint32_t cmds_addr, hwaddr *src, hwaddr *dst) {
 	
 	if(!not_found) {
 		_dst = *((uint32_t *)(&ptr[i + 2]));
-		PL330_VFIO_DPRINTF("dst address found\n");
 	} else {
-		PL330_VFIO_DPRINTF("dst address not found\n");
 		return -1;
 	}
 
