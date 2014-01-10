@@ -187,8 +187,6 @@ DisplayType display_type = DT_DEFAULT;
 static int display_remote;
 const char* keyboard_layout = NULL;
 ram_addr_t ram_size;
-const char *mem_path = NULL;
-int mem_prealloc = 0; /* force preallocation of physical target memory */
 int nb_nics;
 NICInfo nd_table[MAX_NICS];
 int autostart;
@@ -525,6 +523,27 @@ static QemuOptsList qemu_msg_opts = {
     .desc = {
         {
             .name = "timestamp",
+            .type = QEMU_OPT_BOOL,
+        },
+        { /* end of list */ }
+    },
+};
+
+static QemuOptsList qemu_mem_path_opts = {
+    .name = "mem-path",
+    .implied_opt_name = "path",
+    .head = QTAILQ_HEAD_INITIALIZER(qemu_mem_path_opts.head),
+    .desc = {
+        {
+            .name = "path",
+            .type = QEMU_OPT_STRING,
+        },
+        {
+            .name = "prealloc",
+            .type = QEMU_OPT_BOOL,
+        },
+        {
+            .name = "share",
             .type = QEMU_OPT_BOOL,
         },
         { /* end of list */ }
@@ -2892,6 +2911,7 @@ int main(int argc, char **argv, char **envp)
     qemu_add_opts(&qemu_tpmdev_opts);
     qemu_add_opts(&qemu_realtime_opts);
     qemu_add_opts(&qemu_msg_opts);
+    qemu_add_opts(&qemu_mem_path_opts);
 
     runstate_init();
 
@@ -3209,11 +3229,18 @@ int main(int argc, char **argv, char **envp)
                 break;
 #endif
             case QEMU_OPTION_mempath:
-                mem_path = optarg;
+                if (!qemu_opts_parse(qemu_find_opts("mem-path"), optarg, 1)) {
+                    exit(1);
+                }
                 break;
-            case QEMU_OPTION_mem_prealloc:
-                mem_prealloc = 1;
+            case QEMU_OPTION_mem_prealloc: {
+                QemuOpts *mem_opts = qemu_opts_find(qemu_find_opts("mem-path"),
+                                                    NULL);
+                if (mem_opts) {
+                    qemu_opt_set(mem_opts, "prealloc", "on");
+                }
                 break;
+            }
             case QEMU_OPTION_d:
                 log_mask = optarg;
                 break;
