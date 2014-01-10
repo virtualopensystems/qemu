@@ -1436,6 +1436,7 @@ DEF("netdev", HAS_ARG, QEMU_OPTION_netdev,
 #ifdef CONFIG_NETMAP
     "netmap|"
 #endif
+    "vhost-user|"
     "socket|"
     "hubport],id=str[,option][,option][,...]\n", QEMU_ARCH_ALL)
 STEXI
@@ -1766,6 +1767,18 @@ Create a hub port on QEMU "vlan" @var{hubid}.
 The hubport netdev lets you connect a NIC to a QEMU "vlan" instead of a single
 netdev.  @code{-net} and @code{-device} with parameter @option{vlan} create the
 required hub automatically.
+
+@item -netdev vhost-user,path=@var{path}
+
+Connect to a unix domain socket @var{path} on which listens a server that
+implements vhost-user backend.
+
+Example:
+@example
+qemu -m 1024 -mem-path /hugetlbfs,prealloc=on,share=on \
+     -netdev type=vhost-user,id=net0,path=/path/to/sock \
+     -device virtio-net-pci,netdev=net0
+@end example
 
 @item -net dump[,vlan=@var{n}][,file=@var{file}][,len=@var{len}]
 Dump network traffic on VLAN @var{n} to file @var{file} (@file{qemu-vlan0.pcap} by default).
