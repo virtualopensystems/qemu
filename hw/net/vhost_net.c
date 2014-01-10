@@ -304,6 +304,17 @@ void vhost_net_virtqueue_mask(VHostNetState *net, VirtIODevice *dev,
     vhost_virtqueue_mask(&net->dev, dev, idx, mask);
 }
 
+int vhost_net_link_status(VHostNetState *net)
+{
+    int r = 0;
+
+    if (net->dev.vhost_ops->vhost_status) {
+        r = net->dev.vhost_ops->vhost_status(&net->dev);
+    }
+
+    return r;
+}
+
 VHostNetState *get_vhost_net(NetClientState *nc)
 {
     VHostNetState *vhost_net = 0;
@@ -370,6 +381,11 @@ bool vhost_net_virtqueue_pending(VHostNetState *net, int idx)
 void vhost_net_virtqueue_mask(VHostNetState *net, VirtIODevice *dev,
                               int idx, bool mask)
 {
+}
+
+int vhost_net_link_status(VHostNetState *net)
+{
+    return 0;
 }
 
 VHostNetState *get_vhost_net(NetClientState *nc)

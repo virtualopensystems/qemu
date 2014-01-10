@@ -360,12 +360,12 @@ static int vhost_user_call(struct vhost_dev *dev, unsigned long int request,
     }
 
     if (vhost_user_send_fds(fd, &msg, fds, fd_num) < 0) {
-        return -1;
+        goto fail;
     }
 
     if (need_reply) {
         if (vhost_user_recv(fd, &msg) < 0) {
-            return -1;
+            goto fail;
         }
 
         if (msg_request != msg.request) {
@@ -398,6 +398,25 @@ static int vhost_user_call(struct vhost_dev *dev, unsigned long int request,
     }
 
     return 0;
+
+fail:
+    /* mark the backend non operational */
+    error_report("Disconnect detected\n");
+    dev->vhost_ops->vhost_backend_cleanup(dev);
+    return -1;
+}
+
+static int vhost_user_status(struct vhost_dev *dev)
+{
+    int result = 1;
+
+    if (vhost_user_echo(dev) < 0) {
+        error_report("Disconnect detected\n");
+        dev->vhost_ops->vhost_backend_cleanup(dev);
+        result = 0;
+    }
+
+    return result;
 }
 
 static int vhost_user_init(struct vhost_dev *dev, const char *devpath)
@@ -479,6 +498,7 @@ static int vhost_user_cleanup(struct vhost_dev *dev)
 static const VhostOps user_ops = {
         .backend_type = VHOST_BACKEND_TYPE_USER,
         .vhost_call = vhost_user_call,
+        .vhost_status = vhost_user_status,
         .vhost_backend_init = vhost_user_init,
         .vhost_backend_cleanup = vhost_user_cleanup
 };
@@ -511,6 +531,7 @@ static int vhost_kernel_cleanup(struct vhost_dev *dev)
 static const VhostOps kernel_ops = {
         .backend_type = VHOST_BACKEND_TYPE_KERNEL,
         .vhost_call = vhost_kernel_call,
+        .vhost_status = 0,
         .vhost_backend_init = vhost_kernel_init,
         .vhost_backend_cleanup = vhost_kernel_cleanup
 };

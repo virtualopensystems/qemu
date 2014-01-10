@@ -1768,15 +1768,16 @@ The hubport netdev lets you connect a NIC to a QEMU "vlan" instead of a single
 netdev.  @code{-net} and @code{-device} with parameter @option{vlan} create the
 required hub automatically.
 
-@item -netdev vhost-user,path=@var{path}
+@item -netdev vhost-user,path=@var{path}[,poll_time=poll_time]
 
 Connect to a unix domain socket @var{path} on which listens a server that
-implements vhost-user backend.
+implements vhost-user backend. The connection is probed on @var{poll_time} interval (in milliseconds).
+The default @var{poll_time} is 1000 ms.
 
 Example:
 @example
 qemu -m 1024 -mem-path /hugetlbfs,prealloc=on,share=on \
-     -netdev type=vhost-user,id=net0,path=/path/to/sock \
+     -netdev type=vhost-user,id=net0,path=/path/to/sock,poll_time=2500 \
      -device virtio-net-pci,netdev=net0
 @end example
 
