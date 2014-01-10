@@ -81,6 +81,39 @@ static VhostUserMsg m __attribute__ ((unused));
 /* The version of the protocol we support */
 #define VHOST_USER_VERSION    (0x1)
 
+static unsigned long int ioctl_to_vhost_user_request[VHOST_USER_MAX] = {
+    -1, /* VHOST_USER_NONE */
+    VHOST_GET_FEATURES, /* VHOST_USER_GET_FEATURES */
+    VHOST_SET_FEATURES, /* VHOST_USER_SET_FEATURES */
+    VHOST_SET_OWNER, /* VHOST_USER_SET_OWNER */
+    VHOST_RESET_OWNER, /* VHOST_USER_RESET_OWNER */
+    VHOST_SET_MEM_TABLE, /* VHOST_USER_SET_MEM_TABLE */
+    VHOST_SET_LOG_BASE, /* VHOST_USER_SET_LOG_BASE */
+    VHOST_SET_LOG_FD, /* VHOST_USER_SET_LOG_FD */
+    VHOST_SET_VRING_NUM, /* VHOST_USER_SET_VRING_NUM */
+    VHOST_SET_VRING_ADDR, /* VHOST_USER_SET_VRING_ADDR */
+    VHOST_SET_VRING_BASE, /* VHOST_USER_SET_VRING_BASE */
+    VHOST_GET_VRING_BASE, /* VHOST_USER_GET_VRING_BASE */
+    VHOST_SET_VRING_KICK, /* VHOST_USER_SET_VRING_KICK */
+    VHOST_SET_VRING_CALL, /* VHOST_USER_SET_VRING_CALL */
+    VHOST_SET_VRING_ERR, /* VHOST_USER_SET_VRING_ERR */
+    VHOST_NET_SET_BACKEND, /* VHOST_USER_NET_SET_BACKEND */
+    -1 /* VHOST_USER_ECHO */
+};
+
+static VhostUserRequest vhost_user_request_translate(unsigned long int request)
+{
+    VhostUserRequest idx;
+
+    for (idx = 0; idx < VHOST_USER_MAX; idx++) {
+        if (ioctl_to_vhost_user_request[idx] == request) {
+            break;
+        }
+    }
+
+    return (idx == VHOST_USER_MAX) ? VHOST_USER_NONE : idx;
+}
+
 static int vhost_user_recv(int fd, VhostUserMsg *msg)
 {
     ssize_t r;
@@ -235,7 +268,10 @@ static int vhost_user_call(struct vhost_dev *dev, unsigned long int request,
 {
     int fd = dev->control;
     VhostUserMsg msg;
-    int result = 0;
+    VhostUserRequest msg_request;
+    RAMBlock *block = 0;
+    struct vhost_vring_file *file = 0;
+    int need_reply = 0;
     int fds[VHOST_MEMORY_MAX_NREGIONS];
     size_t fd_num = 0;
 
@@ -245,20 +281,123 @@ static int vhost_user_call(struct vhost_dev *dev, unsigned long int request,
         return 0;
     }
 
-    msg.request = VHOST_USER_NONE;
+    msg_request = vhost_user_request_translate(request);
+    msg.request = msg_request;
     msg.flags = VHOST_USER_VERSION;
     msg.size = 0;
 
     switch (request) {
+    case VHOST_GET_FEATURES:
+    case VHOST_GET_VRING_BASE:
+        need_reply = 1;
+        break;
+
+    case VHOST_SET_FEATURES:
+    case VHOST_SET_LOG_BASE:
+        msg.u64 = *((__u64 *) arg);
+        msg.size = sizeof(m.u64);
+        break;
+
+    case VHOST_SET_OWNER:
+    case VHOST_RESET_OWNER:
+        break;
+
+    case VHOST_SET_MEM_TABLE:
+        QTAILQ_FOREACH(block, &ram_list.blocks, next)
+        {
+            if (block->fd > 0) {
+                msg.memory.regions[fd_num].userspace_addr = (__u64) block->host;
+                msg.memory.regions[fd_num].memory_size = block->length;
+                msg.memory.regions[fd_num].guest_phys_addr = block->offset;
+                fds[fd_num++] = block->fd;
+            }
+        }
+
+        msg.memory.nregions = fd_num;
+
+        if (!fd_num) {
+            error_report("Failed initializing vhost-user memory map\n"
+                    "consider using -mem-path option\n");
+            return -1;
+        }
+
+        msg.size = sizeof(m.memory.nregions);
+        msg.size += sizeof(m.memory.padding);
+        msg.size += fd_num * sizeof(VhostUserMemoryRegion);
+
+        break;
+
+    case VHOST_SET_LOG_FD:
+        fds[fd_num++] = *((int *) arg);
+        break;
+
+    case VHOST_SET_VRING_NUM:
+    case VHOST_SET_VRING_BASE:
+        memcpy(&msg.state, arg, sizeof(struct vhost_vring_state));
+        msg.size = sizeof(m.state);
+        break;
+
+    case VHOST_SET_VRING_ADDR:
+        memcpy(&msg.addr, arg, sizeof(struct vhost_vring_addr));
+        msg.size = sizeof(m.addr);
+        break;
+
+    case VHOST_SET_VRING_KICK:
+    case VHOST_SET_VRING_CALL:
+    case VHOST_SET_VRING_ERR:
+    case VHOST_NET_SET_BACKEND:
+        file = arg;
+        msg.u64 = file->index;
+        msg.size = sizeof(m.u64);
+        if (file->fd > 0) {
+            fds[fd_num++] = file->fd;
+        }
+        break;
     default:
         error_report("vhost-user trying to send unhandled ioctl\n");
         return -1;
         break;
     }
 
-    result = vhost_user_send_fds(fd, &msg, fds, fd_num);
+    if (vhost_user_send_fds(fd, &msg, fds, fd_num) < 0) {
+        return -1;
+    }
 
-    return result;
+    if (need_reply) {
+        if (vhost_user_recv(fd, &msg) < 0) {
+            return -1;
+        }
+
+        if (msg_request != msg.request) {
+            error_report("Received unexpected msg type."
+                         " Expected %d received %d\n",
+                         msg_request, msg.request);
+            return -1;
+        }
+
+        switch (msg_request) {
+        case VHOST_USER_GET_FEATURES:
+            if (msg.size != sizeof(m.u64)) {
+                error_report("Received bad msg size.\n");
+                return -1;
+            }
+            *((__u64 *) arg) = msg.u64;
+            break;
+        case VHOST_USER_GET_VRING_BASE:
+            if (msg.size != sizeof(m.state)) {
+                error_report("Received bad msg size.\n");
+                return -1;
+            }
+            memcpy(arg, &msg.state, sizeof(struct vhost_vring_state));
+            break;
+        default:
+            error_report("Received unexpected msg type.\n");
+            return -1;
+            break;
+        }
+    }
+
+    return 0;
 }
 
 static int vhost_user_init(struct vhost_dev *dev, const char *devpath)
