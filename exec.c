@@ -999,7 +999,7 @@ static void *file_ram_alloc(RAMBlock *block,
     int flags;
     unsigned long hpagesize;
     QemuOpts *opts;
-    unsigned int mem_prealloc = 0, mem_share = 0;
+    unsigned int mem_prealloc = 0, mem_share = 0, mem_unlink = 1;
 
     hpagesize = gethugepagesize(path);
     if (!hpagesize) {
@@ -1020,6 +1020,7 @@ static void *file_ram_alloc(RAMBlock *block,
     if (opts) {
         mem_prealloc = qemu_opt_get_bool(opts, "prealloc", 0);
         mem_share = qemu_opt_get_bool(opts, "share", 0);
+        mem_unlink = qemu_opt_get_bool(opts, "unlink", 1);
     }
 
     /* Make name safe to use with mkstemp by replacing '/' with '_'. */
@@ -1029,18 +1030,25 @@ static void *file_ram_alloc(RAMBlock *block,
             *c = '_';
     }
 
-    filename = g_strdup_printf("%s/qemu_back_mem.%s.XXXXXX", path,
-                               sanitized_name);
+    filename = g_strdup_printf("%s/qemu_back_mem.%s%s", path, sanitized_name,
+                               (mem_unlink) ? ".XXXXXX" : "");
     g_free(sanitized_name);
 
-    fd = mkstemp(filename);
+    if (mem_unlink) {
+        fd = mkstemp(filename);
+    } else {
+        fd = open(filename, O_CREAT | O_RDWR | O_EXCL,
+                S_IRWXU | S_IRWXG | S_IRWXO);
+    }
     if (fd < 0) {
         perror("unable to create guest RAM backing store");
         g_free(filename);
         return NULL;
     }
 
-    unlink(filename);
+    if (mem_unlink) {
+        unlink(filename);
+    }
     g_free(filename);
 
     memory = (memory + hpagesize - 1) & ~(hpagesize - 1);

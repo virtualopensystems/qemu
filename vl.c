@@ -546,6 +546,10 @@ static QemuOptsList qemu_mem_path_opts = {
             .name = "share",
             .type = QEMU_OPT_BOOL,
         },
+        {
+            .name = "unlink",
+            .type = QEMU_OPT_BOOL,
+        },
         { /* end of list */ }
     },
 };
