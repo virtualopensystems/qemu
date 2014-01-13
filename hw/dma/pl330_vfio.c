@@ -85,6 +85,11 @@ struct container_guest_mappings{
 	int num_mappings;
 };
 
+struct addr_range {
+	hwaddr start;
+	hwaddr size;
+};
+
 typedef struct PL330VFIOState {
 	SysBusDevice parent_obj;
 
@@ -187,6 +192,55 @@ static void find_efdnum(gpointer key, gpointer val, gpointer irqnum_efdnum)
 	if(*(int *)val == ((struct efdnum_irqnum *)irqnum_efdnum)->irqnum) {
 		((struct efdnum_irqnum *)irqnum_efdnum)->efdnum = *(int *)key;
 	}
+}
+
+
+
+static struct addr_range get_region_range(hwaddr addr)
+{
+	MemoryRegion *system_mem = NULL;
+	/*MemoryRegion *sub_mem_region = NULL;*/
+	struct addr_range range;
+	hwaddr size;
+
+	MemoryRegion *mem_region_found;
+
+	system_mem = get_system_memory();
+	mem_region_found = memory_region_find(system_mem, addr, 1).mr;
+
+	PL330_VFIO_DPRINTF("region found - name: %s, "
+		" (hw)addr: %llx "
+		"ram_addr: %x\n", mem_region_found->name,
+		mem_region_found->addr, mem_region_found->ram_addr);
+
+	size = int128_get64(int128_sub(mem_region_found->size, int128_one()));
+
+	range.start = mem_region_found->addr;
+	// why doesn't it tell the truth about the size?
+	range.size = size + 1;
+
+	return range;
+
+	/*QTAILQ_FOREACH(sub_mem_region, &mem_region_found->subregions, subregions_link) {
+		if(sub_mem_region != NULL && sub_mem_region->ram) {
+			hwaddr size = int128_get64(int128_sub(sub_mem_region->size, int128_one()));
+			if(sub_mem_region->alias) {
+				PL330_VFIO_DPRINTF("ram subregion - name: %s, alias: %s, alias_offset: %llx"
+						" (hw)addr: %llx, "
+						"ram_addr: %x, size: %llx\n", sub_mem_region->name,
+						sub_mem_region->alias->name,
+						sub_mem_region->alias_offset,
+						sub_mem_region->addr,
+						sub_mem_region->ram_addr, size);
+			} else {
+				PL330_VFIO_DPRINTF("ram subregion - name: %s, "
+						" (hw)addr: %llx - %llx, "
+						"ram_addr: %x, size: %llx\n", sub_mem_region->name,
+						sub_mem_region->addr, sub_mem_region->addr + size,
+						sub_mem_region->ram_addr, size);
+			}
+		}
+	}*/
 }
 
 /*
@@ -340,7 +394,10 @@ static void pl330_vfio_iomem_write(void *opaque, hwaddr addr, uint64_t data, uns
 			start_addr -= page_size;
 			mapped_size += page_size;
 
-			if(update_guest_mapped_mem(state, start_addr, mapped_size)) {
+			struct addr_range range = get_region_range(start_addr);
+
+			/*if(update_guest_mapped_mem(state, start_addr, mapped_size)) {*/
+			if(update_guest_mapped_mem(state, range.start, range.size)) {
 				// error
 				PL330_VFIO_DPRINTF("error while updating guest map\n");
 			}
@@ -584,15 +641,6 @@ static int update_guest_mapped_mem(PL330VFIOState *state, hwaddr start_addr, hwa
 	}
 
 	old_size = state->guest_mapped_mem.size;
-
-	MemoryRegion *ram_region;
-	ram_region = get_system_memory();
-
-	PL330_VFIO_DPRINTF("memory info - name: %s, hwaddr: 0x%llx, addr:0x%x, "
-			"size: %lld%llu\n", ram_region->name,
-			ram_region->addr, ram_region->ram_addr, ram_region->size.hi,
-								ram_region->size.lo);
-
 
 	if(update_inf || update_sup) {
 		struct vfio_iommu_type1_dma_map update = { .argsz = sizeof(update) };
