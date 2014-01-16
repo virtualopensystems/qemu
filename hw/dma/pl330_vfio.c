@@ -32,8 +32,6 @@
 
 #include "sysemu/dma.h"
 
-/*#define VENDOR_ID_PL330_VFIO something*/
-
 #define DEBUG_PL330_VFIO
 #ifdef DEBUG_PL330_VFIO
 #define PL330_VFIO_DPRINTF(fmt, ...)  \
@@ -54,12 +52,10 @@
 /* device specific configuration */
 #define PL330_VFIO_MEMSIZE		0x1000
 #define PL330_MAX_CHANNELS		8
+// this should not be hard coded TODO
 #define PL330_MAX_IRQS			5 // at least, the device tree has 5 set
 // buffer size per request, specified in kernel driver
 #define PL330_BUFF_REQUEST_SIZE		256
-#define MEGA				((1024)*(1024))
-#define PL330_MAX_TRANSFER_SIZE		((20)*(MEGA))	
-#define MAPPING_BUFFER_SIZE		32
 
 #define VFIO_GROUP			"/dev/vfio/0"
 #define VFIO_DEVICE			"2c0a0000.dma"
@@ -109,12 +105,7 @@ typedef struct PL330VFIOState {
 	// irq
 	qemu_irq irq[PL330_MAX_IRQS];
 
-	// guest mapped memory
-	guest_phys_area guest_mapped_mem;
-	struct container_guest_mappings guest_mappings;
-	/*struct vfio_iommu_type1_dma_map vfio_dma_map;*/
-
-	/*void *guest_ptr;*/
+	GHashTable *mapped_regions;
 
 	// eventfd - irq support
 	fd_set set_irq_efd;
@@ -143,23 +134,13 @@ struct debug_ins_request {
 };
 
 static void *get_pl330_reg_ptr(PL330VFIOState *state);
-static int get_dst_addr(uint32_t cmds_addr, hwaddr *src, hwaddr *dst);
+static int get_src_dst_addrs(uint32_t cmds_addr, hwaddr *src, hwaddr *dst);
 static int update_guest_mapped_mem(PL330VFIOState *state, hwaddr start_addr, hwaddr size);
 static int add_eventfd_irq(PL330VFIOState *state, int eventfd_irq, int vfio_irq_index);
 void pl330_vfio_start_irq_handler(PL330VFIOState *state);
 static void vfio_irqfd_init(int device, unsigned int index, int fd);
 int start_irq_handler(PL330VFIOState *state);
-
-static int comp_ptr(const void *a, const void *b)
-{
-	if((*(guest_phys_area **)a)->addr < (*(guest_phys_area **)b)->addr) {
-		return -1;
-	}
-	else if((*(guest_phys_area **)a)->addr > (*(guest_phys_area **)b)->addr){
-		return 1;
-	}
-	return 0;
-}
+static void vfio_irq_unmask(int device, unsigned int index);
 
 static const struct debug_ins_request debug_ins_req_blank = {
 	.dbginst0 = 0,
@@ -194,12 +175,10 @@ static void find_efdnum(gpointer key, gpointer val, gpointer irqnum_efdnum)
 	}
 }
 
-
-
 static struct addr_range get_region_range(hwaddr addr)
 {
 	MemoryRegion *system_mem = NULL;
-	/*MemoryRegion *sub_mem_region = NULL;*/
+
 	struct addr_range range;
 	hwaddr size;
 
@@ -220,31 +199,10 @@ static struct addr_range get_region_range(hwaddr addr)
 	range.size = size + 1;
 
 	return range;
-
-	/*QTAILQ_FOREACH(sub_mem_region, &mem_region_found->subregions, subregions_link) {
-		if(sub_mem_region != NULL && sub_mem_region->ram) {
-			hwaddr size = int128_get64(int128_sub(sub_mem_region->size, int128_one()));
-			if(sub_mem_region->alias) {
-				PL330_VFIO_DPRINTF("ram subregion - name: %s, alias: %s, alias_offset: %llx"
-						" (hw)addr: %llx, "
-						"ram_addr: %x, size: %llx\n", sub_mem_region->name,
-						sub_mem_region->alias->name,
-						sub_mem_region->alias_offset,
-						sub_mem_region->addr,
-						sub_mem_region->ram_addr, size);
-			} else {
-				PL330_VFIO_DPRINTF("ram subregion - name: %s, "
-						" (hw)addr: %llx - %llx, "
-						"ram_addr: %x, size: %llx\n", sub_mem_region->name,
-						sub_mem_region->addr, sub_mem_region->addr + size,
-						sub_mem_region->ram_addr, size);
-			}
-		}
-	}*/
 }
 
 /*
- * Every debug request, to be submitted, will ALWAYS write
+ * Every (debug) request, to be submitted, will ALWAYS write
  * in the following registers in this order:
  * DBGINST0, DBGINST1, DBGCMD
  * */
@@ -257,23 +215,7 @@ static void pl330_vfio_iomem_write(void *opaque, hwaddr addr, uint64_t data, uns
 	PL330VFIOState *state = (PL330VFIOState *)opaque;
 	PL330_VFIO_DPRINTF("write - data %llx - offset %llx\n", (unsigned long long)data,
 							(unsigned long long)addr);
-	/*
-	 * The way usually the controller is instructed to make a memory
-	 * transfer is as follow:
-	 *
-	 * - the user of the controller (in our case the guest kernel driver)
-	 *   builds all the command to realize the transfer and put them in a
-	 *   local buffer.
-	 *   	-> we need to access to this buffer using 
-	 *   			dma_memory_read(&address_space_memory,
-	 *   			memory_address, *buffer, len);
-	 * 
-	 * - the user build also some DEBUG commands to inform the controller
-	 *   of the position of the above commands, and writes them directly
-	 *   in some debug registers. (Before doing that, it has also to read
-	 *   some data from a registers...)
-	 *
-	 * */
+
 	struct debug_ins_request *req = state->pending_request;
 
 	int irqnum;
@@ -289,12 +231,8 @@ static void pl330_vfio_iomem_write(void *opaque, hwaddr addr, uint64_t data, uns
 		// disable in qemu
 		qemu_set_irq(state->irq[irqnum], 0);
 
-		// fin qua tutto bene...ma la seconda volta che provo ad eseguire il
-		// test, l'irq risulta disabilitata dall'iterazione precedente (vfio_platform_irq.c
-		// riga ~100. Devo riabilitarla (unmask) e il codice  qui sotto non 
-		// funziona.
-		// con questo codice l'irq viene triggerata (e quindi viene attivato il corrispettivo
-		// eventfd, ma il select() non si smuove.
+		// unmask the interrupt
+		vfio_irq_unmask(state->device, irqnum);
 
 		struct vfio_irq_info irq = { .argsz = sizeof(irq), .index = irqnum };
 
@@ -302,6 +240,7 @@ static void pl330_vfio_iomem_write(void *opaque, hwaddr addr, uint64_t data, uns
 
 		if (ret) {
         		PL330_VFIO_DPRINTF("ioctl irq error!\n");
+			qemu_log_mask(LOG_GUEST_ERROR, "VFIO pl330: irq error"); 
 		}
 
 		efdnum_irqnum.irqnum = irqnum;
@@ -323,7 +262,7 @@ static void pl330_vfio_iomem_write(void *opaque, hwaddr addr, uint64_t data, uns
 			req->dbginst0 = data;
 		}
 		else {
-			// error
+			qemu_log_mask(LOG_GUEST_ERROR, "VFIO pl330: request error"); 
 		}
 		break;
 	case DBGINST1:
@@ -334,15 +273,16 @@ static void pl330_vfio_iomem_write(void *opaque, hwaddr addr, uint64_t data, uns
 		}
 		else {
 			// error
+			qemu_log_mask(LOG_GUEST_ERROR, "VFIO pl330: request error"); 
 		}
 		break;
 	case DBGCMD:
 		if (req->to_submit) {
 			/*int ret1;*/
 			hwaddr src = 0, dst = 0;
-			uint32_t page_size;
+					/*uint32_t page_size;*/
 
-			if(get_dst_addr(req->dbginst1, &src, &dst)) {
+			if(get_src_dst_addrs(req->dbginst1, &src, &dst)) {
 				PL330_VFIO_DPRINTF("this is not a transfer request\n");
 				*((int *)(state->regs + DBGINST0)) = req->dbginst0;
 				*((int *)(state->regs + DBGINST1)) = req->dbginst1;
@@ -354,52 +294,14 @@ static void pl330_vfio_iomem_write(void *opaque, hwaddr addr, uint64_t data, uns
 				return;
 			}
 
-			page_size = getpagesize();
-			/* memory areas of the guest that we have to map */
-			guest_phys_area src_guest_area = {src, PL330_MAX_TRANSFER_SIZE};
-			guest_phys_area dst_guest_area = {dst, PL330_MAX_TRANSFER_SIZE};
-			guest_phys_area ins_guest_area = {req->dbginst1,
-						PL330_BUFF_REQUEST_SIZE};
+			struct addr_range src_range = get_region_range(src);
+			struct addr_range dst_range = get_region_range(dst);
 
-			guest_phys_area *areas[3] = {&src_guest_area, &dst_guest_area,
-								&ins_guest_area};
-			qsort(areas, 3, sizeof(guest_phys_area *), comp_ptr);
-
-			/* 
-			 * To reduce number of mapping, we make only one request.
-			 * In order to have a successful map, we need to have
-			 * iova, vaddr and size page aligned
-			 * */
-
-			// get the lower address and find the offset to align it to the page
-			hwaddr to_align_padding = areas[0]->addr & (page_size - 1);
-
-			// calculate the minimum area to map
-			hwaddr start_addr = areas[0]->addr - to_align_padding;
-			hwaddr min_mapped_size = (areas[2]->addr + areas[2]->size)
-									- start_addr;
-
-			hwaddr mapped_size;
-			if(min_mapped_size % page_size)	{
-				mapped_size = (min_mapped_size / page_size + 1) * page_size;
-			}
-			else {
-				mapped_size = min_mapped_size;
-			}
-
-			PL330_VFIO_DPRINTF("min mapped size %lluB, mapped size: %lluB, start addr: 0x%llx\n",
-						min_mapped_size, mapped_size, start_addr);
-
-			// we map one page before
-			start_addr -= page_size;
-			mapped_size += page_size;
-
-			struct addr_range range = get_region_range(start_addr);
-
-			/*if(update_guest_mapped_mem(state, start_addr, mapped_size)) {*/
-			if(update_guest_mapped_mem(state, range.start, range.size)) {
+			if(update_guest_mapped_mem(state, src_range.start, src_range.size) ||
+			   update_guest_mapped_mem(state, dst_range.start, dst_range.size)) {
 				// error
 				PL330_VFIO_DPRINTF("error while updating guest map\n");
+				qemu_log_mask(LOG_GUEST_ERROR, "VFIO pl330: error while VFIO-mapping"); 
 			}
 			
 			// flush the request to the real device
@@ -410,7 +312,8 @@ static void pl330_vfio_iomem_write(void *opaque, hwaddr addr, uint64_t data, uns
 			// clear the pending request
 			*req = debug_ins_req_blank;
 		} else {
-			// error
+			// some strange error occurred
+			qemu_log_mask(LOG_GUEST_ERROR, "VFIO pl330: request error"); 
 		}
 		break;
 	default:
@@ -425,7 +328,6 @@ static const MemoryRegionOps pl330_vfio_mem_ops = {
 	.impl 	= { 
 		.min_access_size = 4,
 		.max_access_size = 4,
-		// .unaligned = false,
 	},
 };
 
@@ -435,7 +337,6 @@ static void pl330_vfio_realize(DeviceState *dev, Error **errp)
 	int i, ret;
 	PL330VFIOState *state = PL330VFIO(dev);
     	SysBusDevice *sys_dev = SYS_BUS_DEVICE(dev);
-	PL330_VFIO_DPRINTF("realizing device\n");
 
 	regs = get_pl330_reg_ptr(state);
 	if(regs == VFIO_FAIL) { 
@@ -447,33 +348,20 @@ static void pl330_vfio_realize(DeviceState *dev, Error **errp)
     	/* init mmio region */
     	memory_region_init_io(&state->mmio, OBJECT(state), &pl330_vfio_mem_ops,
     	                      state, "dma-vfio", PL330_VFIO_MEMSIZE);
-	/*
-	 * To speed up the read and write accesses made by the guest
-	 * we can map into the region the memory directly
-	 * */
+	
     	sysbus_init_mmio(sys_dev, &state->mmio);
 
     	/* init irq */
-	sysbus_init_irq(sys_dev, &state->irq[0]); // we require only the first atm
 	for(i = 0; i < PL330_MAX_IRQS; i++) {
-		
+		sysbus_init_irq(sys_dev, &state->irq[i]); // we require only the first atm
 	}
 
 	state->pending_request = g_malloc0(sizeof(struct debug_ins_request));
 
-	// at the beginning there is no memory of the guest mapped
-	state->guest_mapped_mem.addr = 0;
-	state->guest_mapped_mem.size = 0;
-	/*state->vfio_dma_map.argsz = sizeof(state->vfio_dma_map);*/
+	// create hash table to store allocated regions
+	state->mapped_regions = g_hash_table_new_full(g_int64_hash, g_int64_equal,
+								free, free);
 
-	/* to map all the requested memory area of the guest probably will
-	 * not suffice only one map request. With this structure we will
-	 * keep trace of all the mappings required. */
-	state->guest_mappings.num_mappings = 0;
-	state->guest_mappings.mappings = g_malloc0(sizeof(struct guest_mapping) * MAPPING_BUFFER_SIZE);
-
-#define IRQ
-#ifdef IRQ
 	FD_ZERO(&state->set_irq_efd);
 	state->highest_irq_num = 0;
 	state->efdnum_irqnum = g_hash_table_new_full(g_int_hash, g_int_equal,
@@ -482,13 +370,13 @@ static void pl330_vfio_realize(DeviceState *dev, Error **errp)
 	if(PL330_MAX_IRQS > state->device_info.num_irqs) {
 		/*
 		 * the device supports less irqs than the device tree says
-		 * TODO error
 		 * */
+        	error_setg(errp, "not enough irq line of the real device\n");
+		return;
 	}
 
 	for(i = 0; i < PL330_MAX_IRQS; i++) {
 		struct vfio_irq_info irq = { .argsz = sizeof(irq) };
-		/*struct vfio_irq_set set = { .argsz = sizeof(set) };*/
 
 		irq.index = i;
 
@@ -496,6 +384,7 @@ static void pl330_vfio_realize(DeviceState *dev, Error **errp)
 
 		if (ret) {
         		error_setg(errp, "ioctl irq\n");
+			return;
 		}
 
 		PL330_VFIO_DPRINTF("- IRQ %d: range of %d, flags=0x%x\n",
@@ -515,14 +404,11 @@ static void pl330_vfio_realize(DeviceState *dev, Error **errp)
 		sysbus_init_irq(sys_dev, &state->irq[irq.index]);
 		if (add_eventfd_irq(state, irqfd, irq.index)) {
         		error_setg(errp, "IRQ error\n");
-
+			return;
 		}
 	}
 	// start irq handler
 	start_irq_handler(state);
-#endif
-
-    	return;
 }
 
 static void pl330_vfio_class_init(ObjectClass *klass, void *data)
@@ -530,11 +416,7 @@ static void pl330_vfio_class_init(ObjectClass *klass, void *data)
     DeviceClass *dc = DEVICE_CLASS(klass);
 
     dc->realize = pl330_vfio_realize;
-
-    /*
-     * TODO dc->vmsd = &vmstate_pl330_vfio;
-     * TODO dc->reset = pl330_vfio_reset
-     **/
+    
     set_bit(DEVICE_CATEGORY_MISC, dc->categories);
 }
 
@@ -553,8 +435,8 @@ static void pl330_vfio_register_types(void)
 /*
  * This method takes the hw guest address pointing
  * to the set of the instructions generated by the 
- * guest driver and returns the guest hw address of the
- * destination specified for the DMA operation.
+ * guest driver and returns the guest hw address of
+ * source and destination used in the DMA transfer.
  *
  * This is useful to set the DMA mapping.
  * */
@@ -562,7 +444,7 @@ static void pl330_vfio_register_types(void)
 #define DAR 			2
 #define DMAMOV_CMD		0xBC
 #define DMAEND_CMD		0x0
-static int get_dst_addr(uint32_t cmds_addr, hwaddr *src, hwaddr *dst) {
+static int get_src_dst_addrs(uint32_t cmds_addr, hwaddr *src, hwaddr *dst) {
 	// find the DMADST instruction
 	int i;
 	bool not_found = false;
@@ -571,22 +453,7 @@ static int get_dst_addr(uint32_t cmds_addr, hwaddr *src, hwaddr *dst) {
 	uint8_t buffer[len];
 	uint8_t *ptr = buffer;
 
-	/*
-	 * Since the buffer allocated by the guest driver with 
-	 * the DMA controller instructions has to be a contiguous
-	 * chunk of physical memory, we can map it in our address
-	 * space.
-	 *
-	 * TODO handle size of the mapping
-	 * */
-	/*ptr = cpu_physical_memory_map((hwaddr)cmds_addr, &map_len, 0);*/
 	dma_memory_read(&address_space_memory, (hwaddr)cmds_addr, ptr, len);
-	if(ptr == NULL) {
-		// error
-		PL330_VFIO_DPRINTF("error while mapping guest mem to host\n");
-		return -1;
-	}
-
 
 	// TODO set an upper limit of the search if DMAMOV and
 	i = 0;
@@ -625,77 +492,79 @@ static int get_dst_addr(uint32_t cmds_addr, hwaddr *src, hwaddr *dst) {
 	return 0;
 }
 
+static void print_region_map(gpointer key, gpointer val, gpointer no_data)
+{
+	int i;
+	struct container_guest_mappings *maps = val;
+
+	PL330_VFIO_DPRINTF("region key: %llu, num. segments: %d\n", *(hwaddr *)key,
+							maps->num_mappings);		
+
+	struct guest_mapping *mapped_segment;
+	for(i = 0; i < maps->num_mappings; i++){
+		mapped_segment = &maps->mappings[i];
+		PL330_VFIO_DPRINTF("\n     seg num.%d, addr: %llx, size: %llu\n", i,
+				mapped_segment->addr, mapped_segment->size);
+	}
+
+}
+
+static void print_map_status(PL330VFIOState *state)
+{
+	g_hash_table_foreach(state->mapped_regions, print_region_map, NULL);
+}
+
 /* VFIO helper functions */
 static int update_guest_mapped_mem(PL330VFIOState *state, hwaddr start_addr, hwaddr size)
 {
-	hwaddr old_size;
-	hwaddr new_end;
 	bool exit_mapping;
-	bool update_inf = true, update_sup = true;
+	bool map = true;
 
-	// the first time there is no guest memory mapped so we always update
-	if(state->guest_mapped_mem.addr || state->guest_mapped_mem.size) {
-		update_inf = (state->guest_mapped_mem.addr > start_addr);
-		update_sup = (state->guest_mapped_mem.addr
-			+ state->guest_mapped_mem.size < start_addr + size);
+	hwaddr *key = g_malloc(sizeof(hwaddr));
+	*key = start_addr ^ size;
+	if(g_hash_table_lookup_extended(state->mapped_regions, key, NULL, NULL)) {
+		// this region has already been mapped
+		PL330_VFIO_DPRINTF("this region has already been mapped\n");
+		map = false;
 	}
 
-	old_size = state->guest_mapped_mem.size;
-
-	if(update_inf || update_sup) {
+	if(map) {
 		struct vfio_iommu_type1_dma_map update = { .argsz = sizeof(update) };
-		hwaddr new_size, step_size = 0, total_mapped_size = 0, new_start;
-		struct guest_mapping *guest_maps = NULL;
+		hwaddr step_size = 0, new_start, remaining;
 		void *ptr = NULL;
 
-		new_start = (update_inf) ? start_addr : state->guest_mapped_mem.addr;
-		new_end =  (update_sup) ? start_addr + size : state->guest_mapped_mem.addr
-									+ old_size;
-		new_size = new_end - new_start;
-
-		// update previous qemu map
-		if(old_size) {
-			int num, i;
-			struct vfio_iommu_type1_dma_unmap vfio_dma_unmap;
-
-			guest_maps = state->guest_mappings.mappings;
-			num = state->guest_mappings.num_mappings;
-			for(i = 0; i < num; i++) {
-				vfio_dma_unmap.iova = guest_maps[i].addr;
-				vfio_dma_unmap.size = guest_maps[i].size;
-				
-				if(ioctl(state->container, VFIO_IOMMU_UNMAP_DMA, &vfio_dma_unmap)) {
-					PL330_VFIO_DPRINTF("error while dma-unmapping\n");
-					return -1;
-				}
-
-				cpu_physical_memory_unmap(guest_maps[i].guest_ptr,
-						guest_maps[i].size, 0, guest_maps[i].size);
-
-				state->guest_mappings.num_mappings--;
-			}
-			
-		}
+		struct container_guest_mappings *new_mapping;
+		new_mapping = g_malloc(sizeof(struct container_guest_mappings));
+		new_mapping->num_mappings = 0;
+		/* multiple mappings for a single region are not going to
+		happen frequently, we ask only for one */
+		new_mapping->mappings = g_malloc0(sizeof(struct guest_mapping));
 
 		/*
-		 * The following request may non satisfy completely the requested size:
-		 * in this case we need to do multiple mappings.
+		 * The following cpu_phys_mem_map request may non satisfy completely
+		 * the requested size: in this case we need to do multiple requests.
 		 * */
-
-		guest_maps = state->guest_mappings.mappings;
 		exit_mapping = false;
-		while(!exit_mapping && new_size) {
-			step_size = new_size;
-
+		new_start = start_addr;
+		remaining = step_size = size;
+		while(!exit_mapping) {
 			ptr = cpu_physical_memory_map(new_start, &step_size, 0);
+
 			if(ptr == NULL) {
-				PL330_VFIO_DPRINTF("error while creating qemu-map\n");
+				qemu_log_mask(LOG_GUEST_ERROR, "VFIO pl330: mapping error"); 
 				return -1;
 			}
 
-			guest_maps[state->guest_mappings.num_mappings].guest_ptr = ptr;
-			guest_maps[state->guest_mappings.num_mappings].addr = new_start;
-			guest_maps[state->guest_mappings.num_mappings].size = step_size;
+			struct guest_mapping new_map;
+			new_map.guest_ptr = ptr;
+			new_map.addr = new_start;
+			new_map.size = step_size;
+			if(new_mapping->num_mappings) {
+				new_mapping->mappings = g_realloc(new_mapping->mappings,
+					(new_mapping->num_mappings + 1) * sizeof(struct guest_mapping));
+			}
+			new_mapping->mappings[new_mapping->num_mappings] = new_map;
+			new_mapping->num_mappings++;
 
 			update.vaddr = (uintptr_t)ptr;
 			update.flags = VFIO_DEF_MASK;
@@ -703,28 +572,31 @@ static int update_guest_mapped_mem(PL330VFIOState *state, hwaddr start_addr, hwa
 			update.size = step_size;
 
 			PL330_VFIO_DPRINTF("dma map: vaddr: 0x%llx, iova: 0x%llx, size: %llu\
-					, size_2: %llu\n", update.vaddr, update.iova, update.size, new_size);
+					, remaining: %llu\n", update.vaddr, update.iova, update.size, remaining);
+			qemu_log_mask(LOG_GUEST_ERROR, "VFIO pl330: mapping error"); 
+
 			if(ioctl(state->container, VFIO_IOMMU_MAP_DMA, &update)) {
 				PL330_VFIO_DPRINTF("error while updating dma-map\n");
+				qemu_log_mask(LOG_GUEST_ERROR, "VFIO pl330: mapping error"); 
+
 				return -1;
 			}
 
-			// update mapped state
-			state->guest_mappings.num_mappings++;
-			if(new_size >= step_size) {
-				new_size -= step_size;
+			if(remaining > step_size) {
+				remaining -= step_size;
 			}
 			else {
 				exit_mapping = true;
 			}
-			total_mapped_size += step_size;
 			new_start += step_size;
 		}
-		state->guest_mapped_mem.addr = guest_maps[0].addr;
-		state->guest_mapped_mem.size = total_mapped_size;
+
+		g_hash_table_insert(state->mapped_regions, key, new_mapping);
 	} else {
 		PL330_VFIO_DPRINTF("no update necessary\n");
 	}
+
+	print_map_status(state);
 
 	return 0;
 }
@@ -893,17 +765,28 @@ static void *irq_handler_func(void *arg)
 		select(state->highest_irq_num + 1, &state->set_irq_efd,
 						NULL, NULL, NULL);
 		PL330_VFIO_DPRINTF("TRIGGER!\n");
-		/*
-		 * Create a mask with all triggered interrupts, and then clear them.
-		 * It could be done with only one g_hash_table_foreach TODO, but for
-		 * now we keep in this way.
-		 * */
+
 		g_hash_table_foreach(state->efdnum_irqnum, qemu_trigger_irq,
 							state);
 		restore_fdset(state);
 	}
 
 	return NULL;
+}
+
+static void vfio_irq_unmask(int device, unsigned int index)
+{
+	struct vfio_irq_set irq_set = {
+		.argsz = sizeof(irq_set),
+		.flags = VFIO_IRQ_SET_DATA_NONE | VFIO_IRQ_SET_ACTION_UNMASK,
+		.index = index,
+		.start = 0,
+		.count = 1,
+	};
+	int ret = ioctl(device, VFIO_DEVICE_SET_IRQS, &irq_set);
+	if (ret) {
+		qemu_log_mask(LOG_GUEST_ERROR, "VFIO pl330: error while unmasking"); 
+	}
 }
 
 int start_irq_handler(PL330VFIOState *state)
@@ -914,6 +797,8 @@ int start_irq_handler(PL330VFIOState *state)
 	
 	if(ret) {
 		PL330_VFIO_DPRINTF("error while creating thread\n");
+		qemu_log_mask(LOG_GUEST_ERROR, "VFIO pl330: error while creating irq handler"); 
+
 		return -1;
 	}
 	
@@ -947,8 +832,9 @@ static void vfio_irqfd_init(int device, unsigned int index, int fd)
 	irq_set = malloc(argsz);
 
 	if (!irq_set) {
-		PL330_VFIO_DPRINTF("Failure in allocating memory\n");
-		// TODO proper exit
+		PL330_VFIO_DPRINTF("failure while allocating memory for irq\n");
+		qemu_log_mask(LOG_GUEST_ERROR, "VFIO pl330: failure while allocating memory for irq"); 
+
 		return;
 	}
 
@@ -964,7 +850,8 @@ static void vfio_irqfd_init(int device, unsigned int index, int fd)
 	free(irq_set);
 
 	if (ret) {
-		PL330_VFIO_DPRINTF("Failure IRQ \n");
+		PL330_VFIO_DPRINTF("IRQ failure\n");
+		qemu_log_mask(LOG_GUEST_ERROR, "VFIO pl330: IRQ failure"); 
 		return;
 	}
 }
