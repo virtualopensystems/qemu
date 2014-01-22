@@ -9,6 +9,7 @@
 #define ARM_SYSCTL_GPIO_MMC_WPROT 0
 #define ARM_SYSCTL_GPIO_MMC_CARDIN 1
 
-void pl330_vfio_legacy_init(qemu_irq *irq_base);
+/* irq line for the PL330 device */
+qemu_irq pl330_irq[5];
 
 #endif

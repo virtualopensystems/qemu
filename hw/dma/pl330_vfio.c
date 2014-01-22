@@ -57,10 +57,6 @@
 // buffer size per request, specified in kernel driver
 #define PL330_BUFF_REQUEST_SIZE		256
 
-#define VFIO_GROUP			"/dev/vfio/0"
-#define VFIO_DEVICE			"2c0a0000.dma"
-#define VFIO_CONTAINER			"/dev/vfio/vfio"
-
 /*
  * This structure represent a physical memory area of the guest
  * which has to be DMA mapped
@@ -89,16 +85,20 @@ struct addr_range {
 typedef struct PL330VFIOState {
 	SysBusDevice parent_obj;
 
-    	/* Registers memory */
-    	MemoryRegion mmio;
-    	MemoryRegion regs_mem;
+	/* Registers memory */
+	MemoryRegion mmio;
+	MemoryRegion regs_mem;
 
 	/* 32bit registers */
-	void *regs;	
+	void *regs;
 
 	struct debug_ins_request *pending_request;
 
 	// VFIO
+	char *group_str;
+	char *device_str;
+	char *container_str;
+
 	int container, group, device;
 	struct vfio_device_info device_info;
 
@@ -111,7 +111,7 @@ typedef struct PL330VFIOState {
 	fd_set set_irq_efd;
 	int highest_irq_num;
 	pthread_t irq_handler;
-	GHashTable *efdnum_irqnum;	
+	GHashTable *efdnum_irqnum;
 } PL330VFIOState;
 
 
@@ -239,8 +239,8 @@ static void pl330_vfio_iomem_write(void *opaque, hwaddr addr, uint64_t data, uns
 		int ret = ioctl(state->device, VFIO_DEVICE_GET_IRQ_INFO, &irq);
 
 		if (ret) {
-        		PL330_VFIO_DPRINTF("ioctl irq error!\n");
-			qemu_log_mask(LOG_GUEST_ERROR, "VFIO pl330: irq error"); 
+			PL330_VFIO_DPRINTF("ioctl irq error!\n");
+			qemu_log_mask(LOG_GUEST_ERROR, "VFIO pl330: irq error");
 		}
 
 		efdnum_irqnum.irqnum = irqnum;
@@ -262,7 +262,7 @@ static void pl330_vfio_iomem_write(void *opaque, hwaddr addr, uint64_t data, uns
 			req->dbginst0 = data;
 		}
 		else {
-			qemu_log_mask(LOG_GUEST_ERROR, "VFIO pl330: request error"); 
+			qemu_log_mask(LOG_GUEST_ERROR, "VFIO pl330: request error");
 		}
 		break;
 	case DBGINST1:
@@ -273,7 +273,7 @@ static void pl330_vfio_iomem_write(void *opaque, hwaddr addr, uint64_t data, uns
 		}
 		else {
 			// error
-			qemu_log_mask(LOG_GUEST_ERROR, "VFIO pl330: request error"); 
+			qemu_log_mask(LOG_GUEST_ERROR, "VFIO pl330: request error");
 		}
 		break;
 	case DBGCMD:
@@ -301,9 +301,9 @@ static void pl330_vfio_iomem_write(void *opaque, hwaddr addr, uint64_t data, uns
 			   update_guest_mapped_mem(state, dst_range.start, dst_range.size)) {
 				// error
 				PL330_VFIO_DPRINTF("error while updating guest map\n");
-				qemu_log_mask(LOG_GUEST_ERROR, "VFIO pl330: error while VFIO-mapping"); 
+				qemu_log_mask(LOG_GUEST_ERROR, "VFIO pl330: error while VFIO-mapping");
 			}
-			
+
 			// flush the request to the real device
 			*((int *)(state->regs + DBGINST0)) = req->dbginst0;
 			*((int *)(state->regs + DBGINST1)) = req->dbginst1;
@@ -313,7 +313,7 @@ static void pl330_vfio_iomem_write(void *opaque, hwaddr addr, uint64_t data, uns
 			*req = debug_ins_req_blank;
 		} else {
 			// some strange error occurred
-			qemu_log_mask(LOG_GUEST_ERROR, "VFIO pl330: request error"); 
+			qemu_log_mask(LOG_GUEST_ERROR, "VFIO pl330: request error");
 		}
 		break;
 	default:
@@ -323,9 +323,9 @@ static void pl330_vfio_iomem_write(void *opaque, hwaddr addr, uint64_t data, uns
 }
 
 static const MemoryRegionOps pl330_vfio_mem_ops = {
-	.read 	= pl330_vfio_iomem_read,
-	.write 	= pl330_vfio_iomem_write,
-	.impl 	= { 
+	.read	= pl330_vfio_iomem_read,
+	.write	= pl330_vfio_iomem_write,
+	.impl	= {
 		.min_access_size = 4,
 		.max_access_size = 4,
 	},
@@ -336,22 +336,22 @@ static void pl330_vfio_realize(DeviceState *dev, Error **errp)
 	void *regs = NULL;
 	int i, ret;
 	PL330VFIOState *state = PL330VFIO(dev);
-    	SysBusDevice *sys_dev = SYS_BUS_DEVICE(dev);
+	SysBusDevice *sys_dev = SYS_BUS_DEVICE(dev);
 
 	regs = get_pl330_reg_ptr(state);
-	if(regs == VFIO_FAIL) { 
-        	error_setg(errp, "Error while probing real device.\n");
+	if(regs == VFIO_FAIL) {
+		error_setg(errp, "Error while probing real device.\n");
 		return;
 	}
 	state->regs = regs;
 
-    	/* init mmio region */
-    	memory_region_init_io(&state->mmio, OBJECT(state), &pl330_vfio_mem_ops,
-    	                      state, "dma-vfio", PL330_VFIO_MEMSIZE);
-	
-    	sysbus_init_mmio(sys_dev, &state->mmio);
+	/* init mmio region */
+	memory_region_init_io(&state->mmio, OBJECT(state), &pl330_vfio_mem_ops,
+			state, "dma-vfio", PL330_VFIO_MEMSIZE);
 
-    	/* init irq */
+	sysbus_init_mmio(sys_dev, &state->mmio);
+
+	/* init irq */
 	for(i = 0; i < PL330_MAX_IRQS; i++) {
 		sysbus_init_irq(sys_dev, &state->irq[i]); // we require only the first atm
 	}
@@ -360,18 +360,18 @@ static void pl330_vfio_realize(DeviceState *dev, Error **errp)
 
 	// create hash table to store allocated regions
 	state->mapped_regions = g_hash_table_new_full(g_int64_hash, g_int64_equal,
-								free, free);
+			free, free);
 
 	FD_ZERO(&state->set_irq_efd);
 	state->highest_irq_num = 0;
 	state->efdnum_irqnum = g_hash_table_new_full(g_int_hash, g_int_equal,
-								free, free);
+			free, free);
 
 	if(PL330_MAX_IRQS > state->device_info.num_irqs) {
 		/*
 		 * the device supports less irqs than the device tree says
 		 * */
-        	error_setg(errp, "not enough irq line of the real device\n");
+		error_setg(errp, "not enough irq line of the real device\n");
 		return;
 	}
 
@@ -383,7 +383,7 @@ static void pl330_vfio_realize(DeviceState *dev, Error **errp)
 		ret = ioctl(state->device, VFIO_DEVICE_GET_IRQ_INFO, &irq);
 
 		if (ret) {
-        		error_setg(errp, "ioctl irq\n");
+			error_setg(errp, "ioctl irq\n");
 			return;
 		}
 
@@ -394,7 +394,7 @@ static void pl330_vfio_realize(DeviceState *dev, Error **errp)
 
 		int irqfd = eventfd(0, EFD_NONBLOCK | EFD_CLOEXEC);
 		if (irqfd < 0)
-        		error_setg(errp, "eventf irq\n");
+			error_setg(errp, "eventf irq\n");
 
 		vfio_irqfd_init(state->device, irq.index, irqfd);
 
@@ -403,20 +403,34 @@ static void pl330_vfio_realize(DeviceState *dev, Error **errp)
 		 * */
 		sysbus_init_irq(sys_dev, &state->irq[irq.index]);
 		if (add_eventfd_irq(state, irqfd, irq.index)) {
-        		error_setg(errp, "IRQ error\n");
+			error_setg(errp, "IRQ error\n");
 			return;
 		}
 	}
 	// start irq handler
 	start_irq_handler(state);
+
+	for(i = 0; i < PL330_MAX_IRQS; i++) {
+		sysbus_connect_irq(sys_dev, 0, pl330_irq[i]);
+	}
+
+	sysbus_mmio_map(sys_dev, 0, 0x7ffb0000);
 }
+
+static Property pl330_vfio_properties[] = {
+	DEFINE_PROP_STRING("vfio_group", PL330VFIOState, group_str),
+	DEFINE_PROP_STRING("vfio_device", PL330VFIOState, device_str),
+	DEFINE_PROP_STRING("vfio_container", PL330VFIOState, container_str),
+	DEFINE_PROP_END_OF_LIST(),
+};
 
 static void pl330_vfio_class_init(ObjectClass *klass, void *data)
 {
     DeviceClass *dc = DEVICE_CLASS(klass);
 
     dc->realize = pl330_vfio_realize;
-    
+    dc->props = pl330_vfio_properties;
+
     set_bit(DEVICE_CATEGORY_MISC, dc->categories);
 }
 
@@ -441,7 +455,7 @@ static void pl330_vfio_register_types(void)
  * This is useful to set the DMA mapping.
  * */
 #define SAR			0
-#define DAR 			2
+#define DAR			2
 #define DMAMOV_CMD		0xBC
 #define DMAEND_CMD		0x0
 static int get_src_dst_addrs(uint32_t cmds_addr, hwaddr *src, hwaddr *dst) {
@@ -459,12 +473,12 @@ static int get_src_dst_addrs(uint32_t cmds_addr, hwaddr *src, hwaddr *dst) {
 	i = 0;
 	while(ptr[i] != DMAMOV_CMD || (ptr[i + 1] & 0x7) != SAR) {
 		if(i == len - 1) {
-			not_found = true;	
+			not_found = true;
 			break;
 		}
 		i++;
 	}
-	
+
 	if(!not_found) {
 		_src = *((uint32_t *)(&ptr[i + 2]));
 	} else {
@@ -474,12 +488,12 @@ static int get_src_dst_addrs(uint32_t cmds_addr, hwaddr *src, hwaddr *dst) {
 	i += 6; // DMAMOV is 6 bytes long
 	while(ptr[i] != DMAMOV_CMD || (ptr[i + 1] & 0x7) != DAR) {
 		if(i == len - 1) {
-			not_found = true;	
+			not_found = true;
 			break;
 		}
 		i++;
 	}
-	
+
 	if(!not_found) {
 		_dst = *((uint32_t *)(&ptr[i + 2]));
 	} else {
@@ -498,7 +512,7 @@ static void print_region_map(gpointer key, gpointer val, gpointer no_data)
 	struct container_guest_mappings *maps = val;
 
 	PL330_VFIO_DPRINTF("region key: %llu, num. segments: %d\n", *(hwaddr *)key,
-							maps->num_mappings);		
+							maps->num_mappings);
 
 	struct guest_mapping *mapped_segment;
 	for(i = 0; i < maps->num_mappings; i++){
@@ -607,15 +621,17 @@ static void *get_pl330_reg_ptr(PL330VFIOState *state)
 	int ret;
 	int container, group, device;
 	// group id
-	const char *group_str = VFIO_GROUP;
+	const char *group_str = state->group_str;
 	// device id
-	const char *device_str = VFIO_DEVICE;
+	const char *device_str = state->device_str;
+	// vfio container
+	const char *container_str = state->container_str;
 
 	struct vfio_group_status group_status = { .argsz = sizeof(group_status) };
 	struct vfio_iommu_type1_info iommu_info = { .argsz = sizeof(iommu_info) };
 	struct vfio_device_info device_info = { .argsz = sizeof(device_info) };
 
-	container = open(VFIO_CONTAINER, O_RDWR);
+	container = open(container_str, O_RDWR);
 	state->container = container;
 
 	if (ioctl(container, VFIO_GET_API_VERSION) != VFIO_API_VERSION) {
@@ -803,23 +819,6 @@ int start_irq_handler(PL330VFIOState *state)
 	}
 	
 	return 0;
-}
-
-
-void pl330_vfio_legacy_init(qemu_irq *base_irq)
-{
-    DeviceState *dev;
-    SysBusDevice *bus;
-
-    dev = qdev_create(NULL, TYPE_PL330_VFIO);
-    qdev_init_nofail(dev);
-    bus = SYS_BUS_DEVICE(dev);
-    sysbus_mmio_map(bus, 0, 0x7ffb0000);
-	
-    int i;
-    for(i = 0; i < PL330_MAX_IRQS; i++) {
-    	sysbus_connect_irq(bus, 0, base_irq[i]);
-    }
 }
 
 static void vfio_irqfd_init(int device, unsigned int index, int fd)

@@ -371,11 +371,10 @@ static void a15_daughterboard_init(const VEDBoardInfo *daughterboard,
 
     /* 0x7ffb0000: DMA330 DMA controller: not modelled */
     int pl330_irq_id[5] = {88, 89, 90, 91, 92};
-    qemu_irq pl330_irq[5];
     for(n = 0; n < 5; n++) {
 	pl330_irq[n] = qdev_get_gpio_in(dev, pl330_irq_id[n]);
     }
-    pl330_vfio_legacy_init(pl330_irq);
+
     /* 0x7ffd0000: PL354 static memory controller: not modelled */
 }
 
