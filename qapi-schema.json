@@ -3104,6 +3104,21 @@
     '*devname':    'str' } }
 
 ##
+# @NetdevVhostUserOptions
+#
+# Vhost-user network backend
+#
+# @path: control socket path
+#
+# Since 2.0
+##
+{ 'type': 'NetdevVhostUserOptions',
+  'data': {
+    'chardev': 'str' } }
+
+##
+
+##
 # @NetClientOptions
 #
 # A discriminated record of network device traits.
@@ -3121,7 +3136,8 @@
     'dump':     'NetdevDumpOptions',
     'bridge':   'NetdevBridgeOptions',
     'hubport':  'NetdevHubPortOptions',
-    'netmap':   'NetdevNetmapOptions' } }
+    'netmap':   'NetdevNetmapOptions',
+    'vhost-user': 'NetdevVhostUserOptions' } }
 
 ##
 # @NetLegacy

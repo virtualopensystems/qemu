@@ -322,6 +322,9 @@ static void peer_test_vnet_hdr(VirtIONet *n)
     case NET_CLIENT_OPTIONS_KIND_TAP:
         n->has_vnet_hdr = tap_has_vnet_hdr(nc->peer);
         break;
+    case NET_CLIENT_OPTIONS_KIND_VHOST_USER:
+        n->has_vnet_hdr = 0;
+        break;
     default:
         break;
     }
