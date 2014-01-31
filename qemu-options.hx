@@ -221,9 +221,14 @@ gigabytes respectively.
 ETEXI
 
 DEF("mem-path", HAS_ARG, QEMU_OPTION_mempath,
-    "-mem-path FILE  provide backing storage for guest RAM\n", QEMU_ARCH_ALL)
+    "-mem-path [path=]path[,prealloc=on|off][,share=on|off]\n"
+    "                provide backing storage for guest RAM\n"
+    "                path= a directory path for the backing store\n"
+    "                prealloc= preallocate guest memory [default disabled]\n"
+    "                share= enable mmap share flag [default disabled]\n",
+        QEMU_ARCH_ALL)
 STEXI
-@item -mem-path @var{path}
+@item -mem-path [path=]@var{path}[,prealloc=on|off][,share=on|off]
 @findex -mem-path
 Allocate guest RAM from a temporarily created file in @var{path}.
 ETEXI
