@@ -74,6 +74,7 @@ check-qtest-i386-y += tests/fw_cfg-test$(EXESUF)
 check-qtest-i386-y += tests/qom-test$(EXESUF)
 check-qtest-i386-y += tests/blockdev-test$(EXESUF)
 check-qtest-i386-y += tests/qdev-monitor-test$(EXESUF)
+check-qtest-i386-y += tests/vhost-user-test$(EXESUF)
 check-qtest-x86_64-y = $(check-qtest-i386-y)
 gcov-files-i386-y += i386-softmmu/hw/mc146818rtc.c
 gcov-files-x86_64-y = $(subst i386-softmmu/,x86_64-softmmu/,$(gcov-files-i386-y))
@@ -214,7 +215,10 @@ tests/fw_cfg-test$(EXESUF): tests/fw_cfg-test.o $(libqos-pc-obj-y)
 tests/qom-test$(EXESUF): tests/qom-test.o
 tests/blockdev-test$(EXESUF): tests/blockdev-test.o $(libqos-pc-obj-y)
 tests/qdev-monitor-test$(EXESUF): tests/qdev-monitor-test.o $(libqos-pc-obj-y)
+tests/vhost-user-test$(EXESUF): tests/vhost-user-test.o qemu-char.o qemu-timer.o libqemuutil.a libqemustub.a
 tests/qemu-iotests/socket_scm_helper$(EXESUF): tests/qemu-iotests/socket_scm_helper.o
+
+LIBS+= -lutil
 
 # QTest rules
 
