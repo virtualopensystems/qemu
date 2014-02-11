@@ -10,6 +10,7 @@ typedef struct VhostNetOptions {
     NetClientState *net_backend;
     void *opaque;
     bool force;
+    unsigned long long mandatory_features;
 } VhostNetOptions;
 
 struct vhost_net *vhost_net_init(VhostNetOptions *options);
@@ -22,6 +23,7 @@ void vhost_net_cleanup(VHostNetState *net);
 
 unsigned vhost_net_get_features(VHostNetState *net, unsigned features);
 void vhost_net_ack_features(VHostNetState *net, unsigned features);
+unsigned long long vhost_net_features(VHostNetState *net);
 
 bool vhost_net_virtqueue_pending(VHostNetState *net, int n);
 void vhost_net_virtqueue_mask(VHostNetState *net, VirtIODevice *dev,
