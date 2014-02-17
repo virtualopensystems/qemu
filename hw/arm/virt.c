@@ -65,6 +65,7 @@ enum {
     VIRT_GIC_CPU,
     VIRT_UART,
     VIRT_MMIO,
+    VIRT_ETHERNET,
 };
 
 typedef struct MemMapEntry {
@@ -104,7 +105,8 @@ static const MemMapEntry a15memmap[] = {
     [VIRT_MMIO] = { 0xa000000, 0x200 },
     /* ...repeating for a total of NUM_VIRTIO_TRANSPORTS, each of that size */
     /* 0x10000000 .. 0x40000000 reserved for PCI */
-    [VIRT_MEM] = { 0x40000000, 30ULL * 1024 * 1024 * 1024 },
+    [VIRT_MEM] = { 0x40000000, 1ULL * 1024 * 1024 * 1024 },
+    [VIRT_ETHERNET] = { 0xfff51000, 0x1000 },
 };
 
 static const int a15irqmap[] = {
@@ -340,6 +342,25 @@ static void create_uart(const VirtBoardInfo *vbi, qemu_irq *pic)
     g_free(nodename);
 }
 
+static void create_ethernet(const VirtBoardInfo *vbi, qemu_irq *pic)
+{
+    char *nodename;
+    hwaddr base = vbi->memmap[VIRT_ETHERNET].base;
+    hwaddr size = vbi->memmap[VIRT_ETHERNET].size;
+    const char compat[] = "calxeda,hb-xgmac";
+
+    sysbus_create_simple("vfio-platform", base, NULL);
+
+    nodename = g_strdup_printf("/ethernet@%" PRIx64, base);
+    qemu_fdt_add_subnode(vbi->fdt, nodename);
+
+    /* Note that we can't use setprop_string because of the embedded NUL */
+    qemu_fdt_setprop(vbi->fdt, nodename, "compatible", compat, sizeof(compat));
+    qemu_fdt_setprop_sized_cells(vbi->fdt, nodename, "reg", 2, base, 2, size);
+
+    g_free(nodename);
+}
+
 static void create_virtio_devices(const VirtBoardInfo *vbi, qemu_irq *pic)
 {
     int i;
@@ -454,6 +475,7 @@ static void machvirt_init(QEMUMachineInitArgs *args)
     create_gic(vbi, pic);
 
     create_uart(vbi, pic);
+    create_ethernet(vbi, pic);
 
     /* Create mmio transports, so the user can create virtio backends
      * (which will be automatically plugged in to the transports). If
