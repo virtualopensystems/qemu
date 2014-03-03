@@ -80,6 +80,11 @@ void vhost_net_ack_features(struct vhost_net *net, unsigned features)
     }
 }
 
+unsigned long long vhost_net_features(VHostNetState *net)
+{
+    return net->dev.features;
+}
+
 static int vhost_net_get_fd(NetClientState *backend)
 {
     switch (backend->info->type) {
@@ -112,6 +117,7 @@ struct vhost_net *vhost_net_init(VhostNetOptions *options)
 
     net->dev.nvqs = 2;
     net->dev.vqs = net->vqs;
+    net->dev.mandatory_features = options->mandatory_features;
 
     r = vhost_dev_init(&net->dev, options->opaque,
                        options->force);
@@ -346,6 +352,10 @@ unsigned vhost_net_get_features(struct vhost_net *net, unsigned features)
 }
 void vhost_net_ack_features(struct vhost_net *net, unsigned features)
 {
+}
+unsigned long long vhost_net_features(struct vhost_net *net)
+{
+    return 0;
 }
 
 bool vhost_net_virtqueue_pending(VHostNetState *net, int idx)
