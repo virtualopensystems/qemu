@@ -1058,6 +1058,11 @@ hwaddr virtio_queue_get_ring_size(VirtIODevice *vdev, int n)
 	    virtio_queue_get_used_size(vdev, n);
 }
 
+uint16_t virtio_queue_get_avail_idx(VirtIODevice *vdev, int n)
+{
+    return vring_avail_idx(&vdev->vq[n]);
+}
+
 uint16_t virtio_queue_get_last_avail_idx(VirtIODevice *vdev, int n)
 {
     return vdev->vq[n].last_avail_idx;
