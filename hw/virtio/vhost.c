@@ -758,12 +758,13 @@ static void vhost_virtqueue_stop(struct vhost_dev *dev,
     assert(idx >= dev->vq_index && idx < dev->vq_index + dev->nvqs);
     r = ioctl(dev->control, VHOST_GET_VRING_BASE, &state);
     if (r < 0) {
+        state.num = virtio_queue_get_avail_idx(vdev, idx);
         fprintf(stderr, "vhost VQ %d ring restore failed: %d\n", idx, r);
         fflush(stderr);
     }
     virtio_queue_set_last_avail_idx(vdev, idx, state.num);
     virtio_queue_invalidate_signalled_used(vdev, idx);
-    assert (r >= 0);
+
     cpu_physical_memory_unmap(vq->ring, virtio_queue_get_ring_size(vdev, idx),
                               0, virtio_queue_get_ring_size(vdev, idx));
     cpu_physical_memory_unmap(vq->used, virtio_queue_get_used_size(vdev, idx),
