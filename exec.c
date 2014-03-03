@@ -1027,7 +1027,10 @@ static void *file_ram_alloc(RAMBlock *block,
     char *c;
     void *area;
     int fd;
+    int flags;
     unsigned long hpagesize;
+    QemuOpts *opts;
+    unsigned int mem_share = 0;
 
     hpagesize = gethugepagesize(path);
     if (!hpagesize) {
@@ -1041,6 +1044,12 @@ static void *file_ram_alloc(RAMBlock *block,
     if (kvm_enabled() && !kvm_has_sync_mmu()) {
         fprintf(stderr, "host lacks kvm mmu notifiers, -mem-path unsupported\n");
         return NULL;
+    }
+
+    /* Fill config options */
+    opts = qemu_opts_find(qemu_find_opts("mem-path"), NULL);
+    if (opts) {
+        mem_share = qemu_opt_get_bool(opts, "share", 0);
     }
 
     /* Make name safe to use with mkstemp by replacing '/' with '_'. */
@@ -1063,7 +1072,7 @@ static void *file_ram_alloc(RAMBlock *block,
     unlink(filename);
     g_free(filename);
 
-    memory = (memory+hpagesize-1) & ~(hpagesize-1);
+    memory = (memory + hpagesize - 1) & ~(hpagesize - 1);
 
     /*
      * ftruncate is not supported by hugetlbfs in older
@@ -1074,7 +1083,8 @@ static void *file_ram_alloc(RAMBlock *block,
     if (ftruncate(fd, memory))
         perror("ftruncate");
 
-    area = mmap(0, memory, PROT_READ | PROT_WRITE, MAP_PRIVATE, fd, 0);
+    flags = mem_share ? MAP_SHARED : MAP_PRIVATE;
+    area = mmap(0, memory, PROT_READ | PROT_WRITE, flags, fd, 0);
     if (area == MAP_FAILED) {
         perror("file_ram_alloc: can't mmap RAM pages");
         close(fd);
@@ -1244,6 +1254,8 @@ ram_addr_t qemu_ram_alloc_from_ptr(ram_addr_t size, void *host,
                                    MemoryRegion *mr)
 {
     RAMBlock *block, *new_block;
+    QemuOpts *opts;
+    const char *mem_path = 0;
     ram_addr_t old_ram_size, new_ram_size;
 
     old_ram_size = last_ram_offset() >> TARGET_PAGE_BITS;
@@ -1251,6 +1263,11 @@ ram_addr_t qemu_ram_alloc_from_ptr(ram_addr_t size, void *host,
     size = TARGET_PAGE_ALIGN(size);
     new_block = g_malloc0(sizeof(*new_block));
     new_block->fd = -1;
+
+    opts = qemu_opts_find(qemu_find_opts("mem-path"), NULL);
+    if (opts) {
+        mem_path = qemu_opt_get(opts, "path");
+    }
 
     /* This assumes the iothread lock is taken here too.  */
     qemu_mutex_lock_ramlist();
