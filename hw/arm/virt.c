@@ -369,6 +369,7 @@ static int vfio_init_func(QemuOpts *opts, void *opaque)
     int irq_start = vbi->avail_vfio_irq;
     hwaddr vfio_base = vbi->avail_vfio_base;
     char *nodename;
+    char *str_ptr;
     char *corrected_compat, *compat, *name;
     int num_irqs, num_regions;
     MemoryRegion *mr;
@@ -377,6 +378,8 @@ static int vfio_init_func(QemuOpts *opts, void *opaque)
     uint64_t *reg_attr;
     uint64_t size;
     Error *errp = NULL;
+    bool is_amba = false;
+    int compat_str_len;
 
     if (!driver) {
         qerror_report(QERR_MISSING_PARAMETER, "driver");
@@ -442,17 +445,30 @@ static int vfio_init_func(QemuOpts *opts, void *opaque)
 
         /*
          * process compatibility property string passed by end-user
-         * replaces / by ,
-         * currently a single property compatibility value is supported!
+         * replaces / by , and ; by NUL character
          */
         corrected_compat = g_strdup(compat);
-        char *slash = strchr(corrected_compat, '/');
-        if (slash != NULL) {
-            *slash = ',';
-        } else {
-            error_report("Wrong compat string %s, should contain a /\n",
-                         compat);
-            exit(1);
+        /*
+         * the total length of the string has to include also the last
+         * NUL char.
+         */
+        compat_str_len = strlen(corrected_compat) + 1;
+
+        str_ptr = corrected_compat;
+        while ((str_ptr = strchr(str_ptr, '/')) != NULL) {
+            *str_ptr = ',';
+        }
+
+        /* check if is an AMBA device */
+        str_ptr = corrected_compat;
+        if (strstr(str_ptr, "arm,primecell") != NULL) {
+            is_amba = true;
+        }
+
+        /* substitute ";" with the NUL char */
+        str_ptr = corrected_compat;
+        while ((str_ptr = strchr(str_ptr, ';')) != NULL) {
+            *str_ptr = '\0';
         }
 
         sysbus_mmio_map(s, 0, vfio_base);
@@ -462,7 +478,7 @@ static int vfio_init_func(QemuOpts *opts, void *opaque)
         qemu_fdt_add_subnode(vbi->fdt, nodename);
 
         qemu_fdt_setprop(vbi->fdt, nodename, "compatible",
-                             corrected_compat, strlen(corrected_compat));
+                             corrected_compat, compat_str_len);
 
         ret = qemu_fdt_setprop_sized_cells_from_array(vbi->fdt, nodename, "reg",
                          num_regions*2, reg_attr);
@@ -471,6 +487,15 @@ static int vfio_init_func(QemuOpts *opts, void *opaque)
         }
 
         irq_attr = g_new(uint32_t, num_irqs*3);
+
+        if (is_amba) {
+            qemu_fdt_setprop_cells(vbi->fdt, nodename, "clocks",
+                                   vbi->clock_phandle);
+            char clock_names[] = "apb_pclk";
+            qemu_fdt_setprop(vbi->fdt, nodename, "clock-names", clock_names,
+                                                       sizeof(clock_names));
+        }
+
         for (i = 0; i < num_irqs; i++) {
             sysbus_connect_irq(s, i, vbi->pic[irq_start+i]);
 
