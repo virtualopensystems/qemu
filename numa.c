@@ -32,9 +32,14 @@
 #include "qapi-visit.h"
 #include "qapi/opts-visitor.h"
 #include "qapi/dealloc-visitor.h"
+#include "qapi/qmp-output-visitor.h"
+#include "qapi/qmp-input-visitor.h"
+#include "qapi/string-output-visitor.h"
+#include "qapi/string-input-visitor.h"
 #include "qapi/qmp/qerror.h"
 #include "hw/boards.h"
 #include "sysemu/hostmem.h"
+#include "qmp-commands.h"
 
 QemuOptsList qemu_numa_opts = {
     .name = "numa",
@@ -280,4 +285,71 @@ void memory_region_allocate_system_memory(MemoryRegion *mr, Object *owner,
         vmstate_register_ram_global(seg);
         addr += size;
     }
+}
+
+MemdevList *qmp_query_memdev(Error **errp)
+{
+    MemdevList *list = NULL, *m;
+    HostMemoryBackend *backend;
+    Error *err = NULL;
+    int i;
+
+    for (i = 0; i < nb_numa_nodes; i++) {
+        backend = numa_info[i].node_memdev;
+
+        m = g_malloc0(sizeof(*m));
+        m->value = g_malloc0(sizeof(*m->value));
+        m->value->size = object_property_get_int(OBJECT(backend), "size",
+                                                 &err);
+        if (err) {
+            goto error;
+        }
+
+        m->value->merge = object_property_get_bool(OBJECT(backend), "merge",
+                                                   &err);
+        if (err) {
+            goto error;
+        }
+
+        m->value->dump = object_property_get_bool(OBJECT(backend), "dump",
+                                                  &err);
+        if (err) {
+            goto error;
+        }
+
+        m->value->prealloc = object_property_get_bool(OBJECT(backend),
+                                                      "prealloc", &err);
+        if (err) {
+            goto error;
+        }
+
+        m->value->policy = object_property_get_enum(OBJECT(backend),
+                                                    "policy",
+                                                    HostMemPolicy_lookup,
+                                                    &err);
+        if (err) {
+            goto error;
+        }
+
+        object_property_get_uint16List(OBJECT(backend), "host-nodes",
+                                       &m->value->host_nodes, &err);
+        if (err) {
+            goto error;
+        }
+
+        m->next = list;
+        list = m;
+    }
+
+    return list;
+
+error:
+    while (list) {
+        m = list;
+        list = list->next;
+        g_free(m->value);
+        g_free(m);
+    }
+    qerror_report_err(err);
+    return NULL;
 }
