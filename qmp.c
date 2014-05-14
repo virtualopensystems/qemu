@@ -540,7 +540,8 @@ void object_add(const char *type, const char *id, const QDict *qdict,
 
     klass = object_class_by_name(type);
     if (!klass) {
-        error_setg(errp, "invalid class name");
+        error_set(errp, QERR_INVALID_PARAMETER_VALUE,
+                  "qom-type", "a valid class name");
         return;
     }
 
