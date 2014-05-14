@@ -1020,7 +1020,8 @@ static void sigbus_handler(int signal)
 
 static void *file_ram_alloc(RAMBlock *block,
                             ram_addr_t memory,
-                            const char *path)
+                            const char *path,
+                            Error **errp)
 {
     char *filename;
     char *sanitized_name;
@@ -1039,7 +1040,8 @@ static void *file_ram_alloc(RAMBlock *block,
     }
 
     if (kvm_enabled() && !kvm_has_sync_mmu()) {
-        fprintf(stderr, "host lacks kvm mmu notifiers, -mem-path unsupported\n");
+        error_setg(errp,
+                   "host lacks kvm mmu notifiers, -mem-path unsupported\n");
         goto error;
     }
 
@@ -1056,7 +1058,8 @@ static void *file_ram_alloc(RAMBlock *block,
 
     fd = mkstemp(filename);
     if (fd < 0) {
-        perror("unable to create backing store for hugepages");
+        error_setg_errno(errp, errno,
+                         "unable to create backing store for hugepages");
         g_free(filename);
         goto error;
     }
@@ -1071,12 +1074,14 @@ static void *file_ram_alloc(RAMBlock *block,
      * If anything goes wrong with it under other filesystems,
      * mmap will fail.
      */
-    if (ftruncate(fd, memory))
+    if (ftruncate(fd, memory)) {
         perror("ftruncate");
+    }
 
     area = mmap(0, memory, PROT_READ | PROT_WRITE, MAP_PRIVATE, fd, 0);
     if (area == MAP_FAILED) {
-        perror("file_ram_alloc: can't mmap RAM pages");
+        error_setg_errno(errp, errno,
+                         "unable to map backing store for hugepages");
         close(fd);
         goto error;
     }
@@ -1304,13 +1309,14 @@ static ram_addr_t ram_block_add(RAMBlock *new_block)
 
 #ifdef __linux__
 ram_addr_t qemu_ram_alloc_from_file(ram_addr_t size, MemoryRegion *mr,
-                                    const char *mem_path)
+                                    const char *mem_path,
+                                    Error **errp)
 {
     RAMBlock *new_block;
 
     if (xen_enabled()) {
-        fprintf(stderr, "-mem-path not supported with Xen\n");
-        exit(1);
+        error_setg(errp, "-mem-path not supported with Xen\n");
+        return -1;
     }
 
     if (phys_mem_alloc != qemu_anon_ram_alloc) {
@@ -1319,16 +1325,22 @@ ram_addr_t qemu_ram_alloc_from_file(ram_addr_t size, MemoryRegion *mr,
          * phys_mem_alloc, but we haven't bothered to provide
          * a hook there.
          */
-        fprintf(stderr,
-                "-mem-path not supported with this accelerator\n");
-        exit(1);
+        error_setg(errp,
+                   "-mem-path not supported with this accelerator\n");
+        return -1;
     }
 
     size = TARGET_PAGE_ALIGN(size);
     new_block = g_malloc0(sizeof(*new_block));
     new_block->mr = mr;
     new_block->length = size;
-    new_block->host = file_ram_alloc(new_block, size, mem_path);
+    new_block->host = file_ram_alloc(new_block, size,
+                                     mem_path, errp);
+    if (!new_block->host) {
+        g_free(new_block);
+        return -1;
+    }
+
     return ram_block_add(new_block);
 }
 #endif
