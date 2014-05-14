@@ -50,6 +50,7 @@ struct HostMemoryBackend {
 
     /* protected */
     uint64_t size;
+    bool merge, dump;
 
     MemoryRegion mr;
 };
