@@ -97,5 +97,6 @@ void object_add_completion(ReadLineState *rs, int nb_args, const char *str);
 void object_del_completion(ReadLineState *rs, int nb_args, const char *str);
 void device_add_completion(ReadLineState *rs, int nb_args, const char *str);
 void device_del_completion(ReadLineState *rs, int nb_args, const char *str);
+void hmp_info_memdev(Monitor *mon, const QDict *qdict);
 
 #endif
