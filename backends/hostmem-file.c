@@ -30,10 +30,9 @@ struct HostMemoryBackendFile {
 };
 
 static void
-file_backend_memory_init(UserCreatable *uc, Error **errp)
+file_backend_memory_alloc(HostMemoryBackend *backend, Error **errp)
 {
-    HostMemoryBackend *backend = MEMORY_BACKEND(uc);
-    HostMemoryBackendFile *fb = MEMORY_BACKEND_FILE(uc);
+    HostMemoryBackendFile *fb = MEMORY_BACKEND_FILE(backend);
 
     if (!backend->size) {
         error_setg(errp, "can't create backend with size 0");
@@ -58,9 +57,9 @@ file_backend_memory_init(UserCreatable *uc, Error **errp)
 static void
 file_backend_class_init(ObjectClass *oc, void *data)
 {
-    UserCreatableClass *ucc = USER_CREATABLE_CLASS(oc);
+    HostMemoryBackendClass *bc = MEMORY_BACKEND_CLASS(oc);
 
-    ucc->complete = file_backend_memory_init;
+    bc->alloc = file_backend_memory_alloc;
 }
 
 static char *get_mem_path(Object *o, Error **errp)

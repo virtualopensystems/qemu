@@ -68,8 +68,16 @@ static void host_memory_backend_finalize(Object *obj)
 static void
 host_memory_backend_memory_init(UserCreatable *uc, Error **errp)
 {
-    error_setg(errp, "memory_init is not implemented for type [%s]",
-               object_get_typename(OBJECT(uc)));
+    HostMemoryBackend *backend = MEMORY_BACKEND(uc);
+    HostMemoryBackendClass *bc = MEMORY_BACKEND_GET_CLASS(uc);
+
+    if (!bc->alloc) {
+        error_setg(errp, "memory_alloc is not implemented for type [%s]",
+                   object_get_typename(OBJECT(uc)));
+        return;
+    }
+
+    bc->alloc(backend, errp);
 }
 
 MemoryRegion *
