@@ -152,11 +152,9 @@ static void pc_init1(QEMUMachineInitArgs *args,
 
     /* allocate ram and load rom/bios */
     if (!xen_enabled()) {
-        fw_cfg = pc_memory_init(system_memory,
-                       args->kernel_filename, args->kernel_cmdline,
-                       args->initrd_filename,
-                       below_4g_mem_size, above_4g_mem_size,
-                       rom_memory, &ram_memory, guest_info);
+        fw_cfg = pc_memory_init(args, system_memory,
+                                below_4g_mem_size, above_4g_mem_size,
+                                rom_memory, &ram_memory, guest_info);
     }
 
     gsi_state = g_malloc0(sizeof(*gsi_state));

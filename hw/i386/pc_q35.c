@@ -139,9 +139,7 @@ static void pc_q35_init(QEMUMachineInitArgs *args)
 
     /* allocate ram and load rom/bios */
     if (!xen_enabled()) {
-        pc_memory_init(get_system_memory(),
-                       args->kernel_filename, args->kernel_cmdline,
-                       args->initrd_filename,
+        pc_memory_init(args, get_system_memory(),
                        below_4g_mem_size, above_4g_mem_size,
                        rom_memory, &ram_memory, guest_info);
     }

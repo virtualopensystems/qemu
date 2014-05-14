@@ -1191,10 +1191,8 @@ void pc_acpi_init(const char *default_dsdt)
     }
 }
 
-FWCfgState *pc_memory_init(MemoryRegion *system_memory,
-                           const char *kernel_filename,
-                           const char *kernel_cmdline,
-                           const char *initrd_filename,
+FWCfgState *pc_memory_init(QEMUMachineInitArgs *args,
+                           MemoryRegion *system_memory,
                            ram_addr_t below_4g_mem_size,
                            ram_addr_t above_4g_mem_size,
                            MemoryRegion *rom_memory,
@@ -1206,7 +1204,7 @@ FWCfgState *pc_memory_init(MemoryRegion *system_memory,
     MemoryRegion *ram_below_4g, *ram_above_4g;
     FWCfgState *fw_cfg;
 
-    linux_boot = (kernel_filename != NULL);
+    linux_boot = (args->kernel_filename != NULL);
 
     /* Allocate RAM.  We allocate it as a single memory region and use
      * aliases to address portions of it, mostly for backwards compatibility
@@ -1247,7 +1245,8 @@ FWCfgState *pc_memory_init(MemoryRegion *system_memory,
     rom_set_fw(fw_cfg);
 
     if (linux_boot) {
-        load_linux(fw_cfg, kernel_filename, initrd_filename, kernel_cmdline, below_4g_mem_size);
+        load_linux(fw_cfg, args->kernel_filename, args->initrd_filename,
+                   args->kernel_cmdline, below_4g_mem_size);
     }
 
     for (i = 0; i < nb_option_roms; i++) {
