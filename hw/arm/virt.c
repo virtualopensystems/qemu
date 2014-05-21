@@ -112,6 +112,7 @@ static const MemMapEntry a15memmap[] = {
 static const int a15irqmap[] = {
     [VIRT_UART] = 1,
     [VIRT_MMIO] = 16, /* ...to 16 + NUM_VIRTIO_TRANSPORTS - 1 */
+    [VIRT_ETHERNET] = 77,
 };
 
 static VirtBoardInfo machines[] = {
@@ -348,8 +349,14 @@ static void create_ethernet(const VirtBoardInfo *vbi, qemu_irq *pic)
     hwaddr base = vbi->memmap[VIRT_ETHERNET].base;
     hwaddr size = vbi->memmap[VIRT_ETHERNET].size;
     const char compat[] = "calxeda,hb-xgmac";
+    int main_irq = vbi->irqmap[VIRT_ETHERNET];
+    int power_irq = main_irq+1;
+    int low_power_irq = main_irq+2;
 
-    sysbus_create_simple("vfio-platform", base, NULL);
+    sysbus_create_varargs("vfio-platform", base,
+                          pic[main_irq],
+                          pic[power_irq],
+                          pic[low_power_irq], NULL);
 
     nodename = g_strdup_printf("/ethernet@%" PRIx64, base);
     qemu_fdt_add_subnode(vbi->fdt, nodename);
@@ -357,6 +364,10 @@ static void create_ethernet(const VirtBoardInfo *vbi, qemu_irq *pic)
     /* Note that we can't use setprop_string because of the embedded NUL */
     qemu_fdt_setprop(vbi->fdt, nodename, "compatible", compat, sizeof(compat));
     qemu_fdt_setprop_sized_cells(vbi->fdt, nodename, "reg", 2, base, 2, size);
+    qemu_fdt_setprop_cells(vbi->fdt, nodename, "interrupts",
+                                0x0, main_irq, 0x4,
+                                0x0, power_irq, 0x4,
+                                0x0, low_power_irq, 0x4);
 
     g_free(nodename);
 }

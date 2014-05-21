@@ -83,8 +83,6 @@ typedef struct VFIOINTx {
     EventNotifier interrupt; /* eventfd triggered on interrupt */
     EventNotifier unmask; /* eventfd for unmask on QEMU bypass */
     PCIINTxRoute route; /* routing info for QEMU bypass */
-    uint32_t mmap_timeout; /* delay to re-enable mmaps after interrupt */
-    QEMUTimer *mmap_timer; /* enable mmaps after periods w/o interrupts */
 } VFIOINTx;
 
 typedef struct VFIOMSIVector {
@@ -196,8 +194,8 @@ static void vfio_intx_mmap_enable(void *opaque)
     VFIOPCIDevice *vdev = opaque;
 
     if (vdev->intx.pending) {
-        timer_mod(vdev->intx.mmap_timer,
-               qemu_clock_get_ms(QEMU_CLOCK_VIRTUAL) + vdev->intx.mmap_timeout);
+        timer_mod(vdev->vdev.mmap_timer,
+               qemu_clock_get_ms(QEMU_CLOCK_VIRTUAL) + vdev->vdev.mmap_timeout);
         return;
     }
 
@@ -217,9 +215,9 @@ static void vfio_intx_interrupt(void *opaque)
     vdev->intx.pending = true;
     pci_irq_assert(&vdev->pdev);
     vfio_mmap_set_enabled(vdev, false);
-    if (vdev->intx.mmap_timeout) {
-        timer_mod(vdev->intx.mmap_timer,
-               qemu_clock_get_ms(QEMU_CLOCK_VIRTUAL) + vdev->intx.mmap_timeout);
+    if (vdev->vdev.mmap_timeout) {
+        timer_mod(vdev->vdev.mmap_timer,
+               qemu_clock_get_ms(QEMU_CLOCK_VIRTUAL) + vdev->vdev.mmap_timeout);
     }
 }
 
@@ -457,7 +455,7 @@ static void vfio_disable_intx(VFIOPCIDevice *vdev)
 {
     int fd;
 
-    timer_del(vdev->intx.mmap_timer);
+    timer_del(vdev->vdev.mmap_timer);
     vfio_disable_intx_kvm(vdev);
     vfio_disable_irqindex(&vdev->vdev, VFIO_PCI_INTX_IRQ_INDEX);
     vdev->intx.pending = false;
@@ -3079,7 +3077,7 @@ static int vfio_initfn(PCIDevice *pdev)
     }
 
     if (vfio_pci_read_config(&vdev->pdev, PCI_INTERRUPT_PIN, 1)) {
-        vdev->intx.mmap_timer = timer_new_ms(QEMU_CLOCK_VIRTUAL,
+        vdev->vdev.mmap_timer = timer_new_ms(QEMU_CLOCK_VIRTUAL,
                                                   vfio_intx_mmap_enable, vdev);
         pci_device_set_intx_routing_notifier(&vdev->pdev, vfio_update_irq);
         ret = vfio_enable_intx(vdev);
@@ -3112,8 +3110,8 @@ static void vfio_exitfn(PCIDevice *pdev)
     vfio_unregister_err_notifier(vdev);
     pci_device_set_intx_routing_notifier(&vdev->pdev, NULL);
     vfio_disable_interrupts(vdev);
-    if (vdev->intx.mmap_timer) {
-        timer_free(vdev->intx.mmap_timer);
+    if (vdev->vdev.mmap_timer) {
+        timer_free(vdev->vdev.mmap_timer);
     }
     vfio_teardown_msi(vdev);
     vfio_unmap_bars(vdev);
@@ -3158,7 +3156,7 @@ post_reset:
 static Property vfio_pci_dev_properties[] = {
     DEFINE_PROP_PCI_HOST_DEVADDR("host", VFIOPCIDevice, host),
     DEFINE_PROP_UINT32("x-intx-mmap-timeout-ms", VFIOPCIDevice,
-                       intx.mmap_timeout, 1100),
+                       vdev.mmap_timeout, 1100),
     DEFINE_PROP_BIT("x-vga", VFIOPCIDevice, features,
                     VFIO_FEATURE_ENABLE_VGA_BIT, false),
     DEFINE_PROP_INT32("bootindex", VFIOPCIDevice, bootindex, -1),

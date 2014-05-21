@@ -42,6 +42,13 @@ enum {
     VFIO_DEVICE_TYPE_PLATFORM = 1,
 };
 
+enum {
+    VFIO_IRQ_INACTIVE = 0,
+    VFIO_IRQ_PENDING = 1,
+    VFIO_IRQ_ACTIVE = 2,
+    /* VFIO_IRQ_ACTIVE_AND_PENDING cannot happen with VFIO */
+};
+
 struct VFIOGroup;
 struct VFIODevice;
 
@@ -61,7 +68,6 @@ typedef struct VFIORegion {
     uint8_t nr; /* cache the region number for debug */
 } VFIORegion;
 
-
 /* Base Class for a VFIO device */
 
 typedef struct VFIODevice {
@@ -75,6 +81,8 @@ typedef struct VFIODevice {
     int type;
     bool reset_works;
     bool needs_reset;
+    uint32_t mmap_timeout; /* delay to re-enable mmaps after interrupt */
+    QEMUTimer *mmap_timer; /* enable mmaps after periods w/o interrupts */
     VFIODeviceOps *ops;
 } VFIODevice;
 
