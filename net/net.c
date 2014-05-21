@@ -769,23 +769,24 @@ static int (* const net_client_init_fun[NET_CLIENT_OPTIONS_KIND_MAX])(
     const NetClientOptions *opts,
     const char *name,
     NetClientState *peer) = {
-        [NET_CLIENT_OPTIONS_KIND_NIC]       = net_init_nic,
+        [NET_CLIENT_OPTIONS_KIND_NIC]           = net_init_nic,
 #ifdef CONFIG_SLIRP
-        [NET_CLIENT_OPTIONS_KIND_USER]      = net_init_slirp,
+        [NET_CLIENT_OPTIONS_KIND_USER]          = net_init_slirp,
 #endif
-        [NET_CLIENT_OPTIONS_KIND_TAP]       = net_init_tap,
-        [NET_CLIENT_OPTIONS_KIND_SOCKET]    = net_init_socket,
+        [NET_CLIENT_OPTIONS_KIND_TAP]           = net_init_tap,
+        [NET_CLIENT_OPTIONS_KIND_SOCKET]        = net_init_socket,
 #ifdef CONFIG_VDE
-        [NET_CLIENT_OPTIONS_KIND_VDE]       = net_init_vde,
+        [NET_CLIENT_OPTIONS_KIND_VDE]           = net_init_vde,
 #endif
 #ifdef CONFIG_NETMAP
-        [NET_CLIENT_OPTIONS_KIND_NETMAP]    = net_init_netmap,
+        [NET_CLIENT_OPTIONS_KIND_NETMAP]        = net_init_netmap,
 #endif
-        [NET_CLIENT_OPTIONS_KIND_DUMP]      = net_init_dump,
+        [NET_CLIENT_OPTIONS_KIND_DUMP]          = net_init_dump,
 #ifdef CONFIG_NET_BRIDGE
-        [NET_CLIENT_OPTIONS_KIND_BRIDGE]    = net_init_bridge,
+        [NET_CLIENT_OPTIONS_KIND_BRIDGE]        = net_init_bridge,
 #endif
-        [NET_CLIENT_OPTIONS_KIND_HUBPORT]   = net_init_hubport,
+        [NET_CLIENT_OPTIONS_KIND_HUBPORT]       = net_init_hubport,
+        [NET_CLIENT_OPTIONS_KIND_VHOST_USER]    = net_init_vhost_user,
 };
 
 
@@ -819,6 +820,7 @@ static int net_client_init1(const void *object, int is_netdev, Error **errp)
         case NET_CLIENT_OPTIONS_KIND_BRIDGE:
 #endif
         case NET_CLIENT_OPTIONS_KIND_HUBPORT:
+        case NET_CLIENT_OPTIONS_KIND_VHOST_USER:
             break;
 
         default:
@@ -902,11 +904,12 @@ static int net_host_check_device(const char *device)
                                        , "bridge"
 #endif
 #ifdef CONFIG_SLIRP
-                                       ,"user"
+                                       , "user"
 #endif
 #ifdef CONFIG_VDE
-                                       ,"vde"
+                                       , "vde"
 #endif
+                                       , "vhost-user"
     };
     for (i = 0; i < ARRAY_SIZE(valid_param_list); i++) {
         if (!strncmp(valid_param_list[i], device,
