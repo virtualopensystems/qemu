@@ -732,7 +732,6 @@ void vfio_put_base_device(VFIODevice *vdev)
 
 int vfio_base_device_init(VFIODevice *vdev, int type)
 {
-    VFIODevice *tmp;
     VFIOGroup *group;
     char path[PATH_MAX], iommu_group_path[PATH_MAX], *group_name;
     ssize_t len;
@@ -792,12 +791,9 @@ int vfio_base_device_init(VFIODevice *vdev, int type)
 
     snprintf(path, sizeof(path), "%s", vdev->name);
 
-    QLIST_FOREACH(tmp, &group->device_list, next) {
-        if (strcmp(tmp->name, vdev->name) == 0) {
-            error_report("vfio: error: device %s is already attached", path);
-            vfio_put_group(group, vfio_reset_handler);
-            return -EBUSY;
-        }
+    if (vdev->ops->vfio_is_device_already_attached(vdev, group)) {
+        vfio_put_group(group, vfio_reset_handler);
+        return -EBUSY;
     }
 
     ret = vfio_get_base_device(group, path, vdev);

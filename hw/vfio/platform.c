@@ -43,6 +43,7 @@ typedef struct VFIOPlatformDevice {
     QLIST_HEAD(, VFIOINTp) intp_list; /* list of IRQ */
     /* queue of pending IRQ */
     QSIMPLEQ_HEAD(pending_intp_queue, VFIOINTp) pending_intp_queue;
+    char *compat; /* compatibility string */
 } VFIOPlatformDevice;
 
 
@@ -394,11 +395,6 @@ static int vfio_platform_get_device_interrupts(VFIODevice *vdev)
     int i, ret;
     VFIOPlatformDevice *vplatdev = container_of(vdev, VFIOPlatformDevice, vdev);
 
-    /*
-     * mmap timeout = 1100 ms, PCI default value
-     * this will become a user-defined value in subsequent patch
-     */
-    vdev->mmap_timeout = 1100;
     vdev->mmap_timer = timer_new_ms(QEMU_CLOCK_VIRTUAL,
                                     vfio_intp_mmap_enable, vdev);
 
@@ -446,6 +442,19 @@ static void vfio_disable_intp(VFIODevice *vdev)
 
 }
 
+static bool vfio_platform_is_device_already_attached(VFIODevice *vdev,
+                                                     VFIOGroup *group)
+{
+    VFIODevice *tmp;
+
+    QLIST_FOREACH(tmp, &group->device_list, next) {
+        if (strcmp(tmp->name, vdev->name) == 0) {
+            return true;
+        }
+    }
+    return false;
+}
+
 
 static VFIODeviceOps vfio_platform_ops = {
     .vfio_eoi = vfio_platform_eoi,
@@ -454,6 +463,7 @@ static VFIODeviceOps vfio_platform_ops = {
     .vfio_check_device = vfio_platform_check_device,
     .vfio_get_device_regions = vfio_platform_get_device_regions,
     .vfio_get_device_interrupts = vfio_platform_get_device_interrupts,
+    .vfio_is_device_already_attached = vfio_platform_is_device_already_attached,
 };
 
 
@@ -466,9 +476,7 @@ static void vfio_platform_realize(DeviceState *dev, Error **errp)
 
     vbasedev->ops = &vfio_platform_ops;
 
-    /* TODO: pass device name on command line */
-    vbasedev->name = malloc(PATH_MAX);
-    snprintf(vbasedev->name, PATH_MAX, "%s", "fff51000.ethernet");
+    DPRINTF("vfio device %s, compat = %s\n", vbasedev->name, vdev->compat);
 
     ret = vfio_base_device_init(vbasedev, VFIO_DEVICE_TYPE_PLATFORM);
     if (ret < 0) {
@@ -531,8 +539,8 @@ static const VMStateDescription vfio_platform_vmstate = {
 
 typedef struct VFIOPlatformDeviceClass {
     DeviceClass parent_class;
+    void (*init)(VFIOPlatformDevice *vdev);
 
-    int (*init)(VFIODevice *dev);
 } VFIOPlatformDeviceClass;
 
 #define VFIO_PLATFORM_DEVICE(obj) \
@@ -542,19 +550,28 @@ typedef struct VFIOPlatformDeviceClass {
 #define VFIO_PLATFORM_DEVICE_GET_CLASS(obj) \
      OBJECT_GET_CLASS(VFIOPlatformDeviceClass, (obj), TYPE_VFIO_PLATFORM)
 
+static Property vfio_platform_dev_properties[] = {
+DEFINE_PROP_STRING("vfio_device", VFIOPlatformDevice, vdev.name),
+DEFINE_PROP_STRING("compat", VFIOPlatformDevice, compat),
+DEFINE_PROP_UINT32("mmap-timeout-ms", VFIOPlatformDevice,
+                   vdev.mmap_timeout, 1100),
+DEFINE_PROP_UINT32("num_irqs", VFIOPlatformDevice, vdev.num_irqs, 0),
+DEFINE_PROP_UINT32("num_regions", VFIOPlatformDevice, vdev.num_regions, 0),
+DEFINE_PROP_END_OF_LIST(),
+};
 
 
 static void vfio_platform_dev_class_init(ObjectClass *klass, void *data)
 {
     DeviceClass *dc = DEVICE_CLASS(klass);
     VFIOPlatformDeviceClass *vdc = VFIO_PLATFORM_DEVICE_CLASS(klass);
-
+    dc->props = vfio_platform_dev_properties;
     dc->realize = vfio_platform_realize;
     dc->unrealize = vfio_platform_unrealize;
     dc->vmsd = &vfio_platform_vmstate;
     dc->desc = "VFIO-based platform device assignment";
     set_bit(DEVICE_CATEGORY_MISC, dc->categories);
-
+    dc->cannot_instantiate_with_device_add_yet = false;
     vdc->init = NULL;
 }
 

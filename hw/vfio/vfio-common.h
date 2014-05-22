@@ -123,6 +123,7 @@ struct VFIODeviceOps {
     int (*vfio_check_device)(VFIODevice *vdev);
     int (*vfio_get_device_regions)(VFIODevice *vdev);
     int (*vfio_get_device_interrupts)(VFIODevice *vdev);
+    bool (*vfio_is_device_already_attached)(VFIODevice *vdev, VFIOGroup*);
 };
 
 

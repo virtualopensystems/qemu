@@ -2988,6 +2988,22 @@ static void vfio_unregister_err_notifier(VFIOPCIDevice *vdev)
     event_notifier_cleanup(&vdev->err_notifier);
 }
 
+static bool vfio_pci_is_device_already_attached(VFIODevice *vdev,
+                                                VFIOGroup *group)
+{
+    VFIODevice *tmp;
+
+    QLIST_FOREACH(tmp, &group->device_list, next) {
+        if (strcmp(tmp->name, vdev->name) == 0) {
+            error_report("vfio: error: device %s is already attached",
+                         vdev->name);
+            return true;
+        }
+    }
+    return false;
+}
+
+
 
 static VFIODeviceOps vfio_pci_ops = {
     .vfio_eoi = vfio_pci_eoi,
@@ -2996,6 +3012,7 @@ static VFIODeviceOps vfio_pci_ops = {
     .vfio_check_device = vfio_pci_check_device,
     .vfio_get_device_regions = vfio_pci_get_device_regions,
     .vfio_get_device_interrupts = vfio_pci_get_device_interrupts,
+    .vfio_is_device_already_attached = vfio_pci_is_device_already_attached,
 };
 
 static int vfio_initfn(PCIDevice *pdev)
