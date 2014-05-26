@@ -23,6 +23,7 @@
 #include "hw/sysbus.h"
 
 #include "vfio-common.h"
+#include "sysemu/kvm.h"
 
 typedef struct VFIOINTp {
     QLIST_ENTRY(VFIOINTp) next; /* entry for IRQ list */
@@ -34,6 +35,7 @@ typedef struct VFIOINTp {
     int state; /* inactive, pending, active */
     bool kvm_accel; /* set when QEMU bypass through KVM enabled */
     uint8_t pin; /* index */
+    uint8_t virtualID; /* virtual IRQ */
 } VFIOINTp;
 
 
@@ -44,6 +46,7 @@ typedef struct VFIOPlatformDevice {
     /* queue of pending IRQ */
     QSIMPLEQ_HEAD(pending_intp_queue, VFIOINTp) pending_intp_queue;
     char *compat; /* compatibility string */
+    bool irqfd_allowed;
 } VFIOPlatformDevice;
 
 
@@ -54,6 +57,7 @@ static const MemoryRegionOps vfio_region_ops = {
 };
 
 static void vfio_intp_interrupt(void *opaque);
+void vfio_setup_irqfd(SysBusDevice *s, int index, int virq);
 
 /*
  * It is mandatory to pass a VFIOPlatformDevice since VFIODevice
@@ -419,28 +423,137 @@ static int vfio_platform_get_device_interrupts(VFIODevice *vdev)
 }
 
 
-static void vfio_disable_intp(VFIODevice *vdev)
+static void vfio_disable_intp(VFIOINTp *intp)
 {
-    VFIOINTp *intp;
-    VFIOPlatformDevice *vplatdev = container_of(vdev, VFIOPlatformDevice, vdev);
-    int fd;
+    int fd = event_notifier_get_fd(&intp->interrupt);
+    DPRINTF("close IRQ pin=%d fd=%d\n", intp->pin, fd);
 
-    QLIST_FOREACH(intp, &vplatdev->intp_list, next) {
-        fd = event_notifier_get_fd(&intp->interrupt);
-        DPRINTF("close IRQ pin=%d fd=%d\n", intp->pin, fd);
-
-        vfio_disable_irqindex(vdev, intp->pin);
-        intp->state = VFIO_IRQ_INACTIVE;
-        qemu_set_irq(intp->qemuirq, 0);
-
-        qemu_set_fd_handler(fd, NULL, NULL, NULL);
-        event_notifier_cleanup(&intp->interrupt);
-    }
-
-    /* restore fast path */
-    vfio_mmap_set_enabled(vdev, true);
+    /* remove the IRQ handler */
+    vfio_disable_irqindex(&intp->vdev->vdev, intp->pin);
+    intp->state = VFIO_IRQ_INACTIVE;
+    qemu_set_irq(intp->qemuirq, 0);
+    qemu_set_fd_handler(fd, NULL, NULL, NULL);
+    event_notifier_cleanup(&intp->interrupt);
 
 }
+
+
+/* IRQFD */
+
+static void resampler_handler(void *opaque)
+{
+    VFIOINTp *intp = (VFIOINTp *)opaque;
+    DPRINTF("%s index %d virtual ID = %d fd = %d\n",
+            __func__,
+            intp->pin, intp->virtualID,
+            event_notifier_get_fd(&intp->unmask));
+    vfio_unmask_irqindex(&intp->vdev->vdev, intp->pin);
+}
+
+
+static void vfio_enable_intp_kvm(VFIOINTp *intp)
+{
+#ifdef CONFIG_KVM
+    struct kvm_irqfd irqfd = {
+        .fd = event_notifier_get_fd(&intp->interrupt),
+        .gsi = intp->virtualID,
+        .flags = KVM_IRQFD_FLAG_RESAMPLE,
+    };
+
+    if (!kvm_irqfds_enabled() ||
+        !kvm_check_extension(kvm_state, KVM_CAP_IRQFD_RESAMPLE)) {
+        return;
+    }
+
+    /* Get to a known interrupt state */
+    qemu_set_fd_handler(irqfd.fd, NULL, NULL, NULL);
+    intp->state = VFIO_IRQ_INACTIVE;
+    qemu_set_irq(intp->qemuirq, 0);
+
+    /* Get an eventfd for resample/unmask */
+    if (event_notifier_init(&intp->unmask, 0)) {
+        error_report("vfio: Error: event_notifier_init failed eoi");
+        goto fail;
+    }
+
+    /* KVM triggers it, VFIO listens for it */
+    irqfd.resamplefd = event_notifier_get_fd(&intp->unmask);
+    qemu_set_fd_handler(irqfd.resamplefd, resampler_handler, NULL, intp);
+
+
+    if (kvm_vm_ioctl(kvm_state, KVM_IRQFD, &irqfd)) {
+        error_report("vfio: Error: Failed to setup resample irqfd: %m");
+        goto fail_irqfd;
+    }
+    intp->kvm_accel = true;
+
+    DPRINTF("%s irqfd pin=%d to virtID = %d fd=%d, resamplefd=%d)\n",
+            __func__, intp->pin, intp->virtualID,
+            irqfd.fd, irqfd.resamplefd);
+
+    return;
+
+fail_irqfd:
+    event_notifier_cleanup(&intp->unmask);
+fail:
+    qemu_set_fd_handler(irqfd.fd, vfio_intp_interrupt, NULL, intp);
+    vfio_unmask_irqindex(&intp->vdev->vdev, intp->pin);
+#endif
+}
+
+void vfio_setup_irqfd(SysBusDevice *s, int index, int virq)
+{
+    VFIOPlatformDevice *vdev = container_of(s, VFIOPlatformDevice, sbdev);
+    VFIOINTp *intp;
+    QLIST_FOREACH(intp, &vdev->intp_list, next) {
+        if (intp->pin == index) {
+            intp->virtualID = virq;
+            vfio_enable_intp_kvm(intp);
+        }
+    }
+}
+
+static void vfio_disable_intp_kvm(VFIOINTp *intp)
+{
+#ifdef CONFIG_KVM
+
+    struct kvm_irqfd irqfd = {
+        .fd = event_notifier_get_fd(&intp->interrupt),
+        .gsi = intp->virtualID,
+        .flags = KVM_IRQFD_FLAG_DEASSIGN,
+        };
+
+    if (!intp->kvm_accel) {
+        return;
+    }
+
+    /*
+     * Get to a known state, hardware masked, QEMU ready to accept new
+     * interrupts, QEMU IRQ de-asserted.
+     */
+    intp->state = VFIO_IRQ_INACTIVE;
+    /* Tell KVM to stop listening for an INTp irqfd */
+    if (kvm_vm_ioctl(kvm_state, KVM_IRQFD, &irqfd)) {
+        error_report("vfio: Error: Failed to disable INTx irqfd: %m");
+    }
+
+    /* We only need to close the eventfd for VFIO to cleanup the kernel side */
+    event_notifier_cleanup(&intp->unmask);
+
+    /* QEMU starts listening for interrupt events. */
+    qemu_set_fd_handler(irqfd.fd, vfio_intp_interrupt, NULL, intp->vdev);
+
+    intp->kvm_accel = false;
+
+    /* If we've missed an event, let it re-fire through QEMU */
+    vfio_unmask_irqindex(&intp->vdev->vdev, intp->pin);
+
+    DPRINTF("%s: KVM INTx accel disabled\n", __func__);
+#endif
+}
+
+
+
 
 static bool vfio_platform_is_device_already_attached(VFIODevice *vdev,
                                                      VFIOGroup *group)
@@ -489,6 +602,25 @@ static void vfio_platform_realize(DeviceState *dev, Error **errp)
     }
 }
 
+
+static void vfio_disable_all_intp(VFIODevice *vdev)
+{
+    VFIOINTp *intp;
+    VFIOPlatformDevice *vplatdev =
+        container_of(vdev, VFIOPlatformDevice, vdev);
+
+    QLIST_FOREACH(intp, &vplatdev->intp_list, next) {
+        /* first disable IRQFD handled IRQ and turn them in QEMU handled ones */
+        vfio_disable_intp_kvm(intp);
+        /* actually disable IRQ */
+        vfio_disable_intp(intp);
+    }
+
+    /* restore fast path */
+    vfio_mmap_set_enabled(vdev, true);
+
+}
+
 static void vfio_platform_unrealize(DeviceState *dev, Error **errp)
 {
     int i;
@@ -505,7 +637,7 @@ static void vfio_platform_unrealize(DeviceState *dev, Error **errp)
      * timer free
      * g_free vdev dynamic fields
     */
-    vfio_disable_intp(vbasedev);
+    vfio_disable_all_intp(vbasedev);
 
     while (!QSIMPLEQ_EMPTY(&vplatdev->pending_intp_queue)) {
             QSIMPLEQ_REMOVE_HEAD(&vplatdev->pending_intp_queue, pqnext);
@@ -532,6 +664,10 @@ static void vfio_platform_unrealize(DeviceState *dev, Error **errp)
 
 }
 
+
+
+
+
 static const VMStateDescription vfio_platform_vmstate = {
     .name = TYPE_VFIO_PLATFORM,
     .unmigratable = 1,
@@ -557,6 +693,7 @@ DEFINE_PROP_UINT32("mmap-timeout-ms", VFIOPlatformDevice,
                    vdev.mmap_timeout, 1100),
 DEFINE_PROP_UINT32("num_irqs", VFIOPlatformDevice, vdev.num_irqs, 0),
 DEFINE_PROP_UINT32("num_regions", VFIOPlatformDevice, vdev.num_regions, 0),
+DEFINE_PROP_BOOL("irqfd", VFIOPlatformDevice, irqfd_allowed, true),
 DEFINE_PROP_END_OF_LIST(),
 };
 

@@ -576,6 +576,7 @@ static void kvm_arm_gic_realize(DeviceState *dev, Error **errp)
                             KVM_DEV_ARM_VGIC_GRP_ADDR,
                             KVM_VGIC_V2_ADDR_TYPE_CPU,
                             s->dev_fd);
+    kvm_irqfds_allowed = true;
 }
 
 static void kvm_arm_gic_class_init(ObjectClass *klass, void *data)

@@ -43,6 +43,9 @@
 #include "monitor/qdev.h"
 #include "qemu/config-file.h"
 
+#define ENABLE_IRQFD 1
+void vfio_setup_irqfd(SysBusDevice *s, int index, int virq);
+
 #define NUM_VIRTIO_TRANSPORTS 32
 
 /* Number of external interrupt lines to configure the GIC with */
@@ -380,6 +383,7 @@ static int vfio_init_func(QemuOpts *opts, void *opaque)
     Error *errp = NULL;
     bool is_amba = false;
     int compat_str_len;
+    bool irqfd_allowed;
 
     if (!driver) {
         qerror_report(QERR_MISSING_PARAMETER, "driver");
@@ -417,6 +421,13 @@ static int vfio_init_func(QemuOpts *opts, void *opaque)
                          error_get_pretty(errp));
             exit(1);
            }
+        irqfd_allowed = object_property_get_bool(OBJECT(s), "irqfd", &errp);
+        if (errp != NULL) {
+            error_report("Couldn't retrieve irqfd flag: %s\n",
+                         error_get_pretty(errp));
+            exit(1);
+           }
+
 
         /*
          * collect region info and build reg property as tuplets
@@ -502,6 +513,9 @@ static int vfio_init_func(QemuOpts *opts, void *opaque)
             irq_attr[3*i] = cpu_to_be32(0);
             irq_attr[3*i+1] = cpu_to_be32(irq_start+i);
             irq_attr[3*i+2] = cpu_to_be32(0x4);
+            if (irqfd_allowed) {
+                vfio_setup_irqfd(s, i, irq_start+i);
+            }
         }
 
         ret = qemu_fdt_setprop(vbi->fdt, nodename, "interrupts",
