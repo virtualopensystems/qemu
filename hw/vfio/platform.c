@@ -349,9 +349,9 @@ static int vfio_enable_intp(VFIODevice *vdev, unsigned int index)
 
     sysbus_init_irq(sbdev, &intp->qemuirq);
 
-    ret = event_notifier_init(&intp->interrupt, 0);
+    ret = eventfd_notifier_init(&intp->interrupt, 0);
     if (ret) {
-        error_report("vfio: Error: event_notifier_init failed ");
+        error_report("vfio: Error: eventfd_notifier_init failed ");
         return ret;
     }
     /* build the irq_set to be passed to the vfio kernel driver */
@@ -471,8 +471,8 @@ static void vfio_enable_intp_kvm(VFIOINTp *intp)
     qemu_set_irq(intp->qemuirq, 0);
 
     /* Get an eventfd for resample/unmask */
-    if (event_notifier_init(&intp->unmask, 0)) {
-        error_report("vfio: Error: event_notifier_init failed eoi");
+    if (eventfd_notifier_init(&intp->unmask, 0)) {
+        error_report("vfio: Error: eventfd_notifier_init failed eoi");
         goto fail;
     }
 

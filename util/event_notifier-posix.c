@@ -25,19 +25,37 @@ void event_notifier_init_fd(EventNotifier *e, int fd)
     e->wfd = fd;
 }
 
+int eventfd_notifier_init(EventNotifier *e, int active)
+{
+    int ret;
+
+#ifdef CONFIG_EVENTFD
+    ret = eventfd(0, EFD_NONBLOCK | EFD_CLOEXEC);
+    if (ret >= 0) {
+        e->rfd = e->wfd = ret;
+        ret = 0;
+
+        if (active) {
+            event_notifier_set(e);
+        }
+    }
+#else
+    ret = -1;
+    errno = ENOSYS;
+#endif
+
+    return ret;
+}
+
 int event_notifier_init(EventNotifier *e, int active)
 {
     int fds[2];
     int ret;
 
-#ifdef CONFIG_EVENTFD
-    ret = eventfd(0, EFD_NONBLOCK | EFD_CLOEXEC);
-#else
-    ret = -1;
-    errno = ENOSYS;
-#endif
+    ret = eventfd_notifier_init(e, active);
+
     if (ret >= 0) {
-        e->rfd = e->wfd = ret;
+        return 0;
     } else {
         if (errno != ENOSYS) {
             return -errno;

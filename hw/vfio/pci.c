@@ -261,8 +261,8 @@ static void vfio_enable_intx_kvm(VFIOPCIDevice *vdev)
     pci_irq_deassert(&vdev->pdev);
 
     /* Get an eventfd for resample/unmask */
-    if (event_notifier_init(&vdev->intx.unmask, 0)) {
-        error_report("vfio: Error: event_notifier_init failed eoi");
+    if (eventfd_notifier_init(&vdev->intx.unmask, 0)) {
+        error_report("vfio: Error: eventfd_notifier_init failed eoi");
         goto fail;
     }
 
@@ -414,9 +414,9 @@ static int vfio_enable_intx(VFIOPCIDevice *vdev)
     }
 #endif
 
-    ret = event_notifier_init(&vdev->intx.interrupt, 0);
+    ret = eventfd_notifier_init(&vdev->intx.interrupt, 0);
     if (ret) {
-        error_report("vfio: Error: event_notifier_init failed");
+        error_report("vfio: Error: eventfd_notifier_init failed");
         return ret;
     }
 
@@ -555,8 +555,8 @@ static int vfio_msix_vector_do_use(PCIDevice *pdev, unsigned int nr,
 
     msix_vector_use(pdev, nr);
 
-    if (event_notifier_init(&vector->interrupt, 0)) {
-        error_report("vfio: Error: event_notifier_init failed");
+    if (eventfd_notifier_init(&vector->interrupt, 0)) {
+        error_report("vfio: Error: eventfd_notifier_init failed");
     }
 
     /*
@@ -718,8 +718,8 @@ retry:
         vector->vdev = vdev;
         vector->use = true;
 
-        if (event_notifier_init(&vector->interrupt, 0)) {
-            error_report("vfio: Error: event_notifier_init failed");
+        if (eventfd_notifier_init(&vector->interrupt, 0)) {
+            error_report("vfio: Error: eventfd_notifier_init failed");
         }
 
         vector->msg = msi_get_message(&vdev->pdev, i);
@@ -2925,7 +2925,7 @@ static void vfio_register_err_notifier(VFIOPCIDevice *vdev)
         return;
     }
 
-    if (event_notifier_init(&vdev->err_notifier, 0)) {
+    if (eventfd_notifier_init(&vdev->err_notifier, 0)) {
         error_report("vfio: Unable to init event notifier for error detection");
         vdev->pci_aer = false;
         return;
