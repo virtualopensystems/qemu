@@ -440,20 +440,13 @@ static void vfio_disable_intp(VFIOINTp *intp)
 
 /* IRQFD */
 
-static void resampler_handler(void *opaque)
-{
-    VFIOINTp *intp = (VFIOINTp *)opaque;
-    DPRINTF("%s index %d virtual ID = %d fd = %d\n",
-            __func__,
-            intp->pin, intp->virtualID,
-            event_notifier_get_fd(&intp->unmask));
-    vfio_unmask_irqindex(&intp->vdev->vdev, intp->pin);
-}
-
-
-static void vfio_enable_intp_kvm(VFIOINTp *intp)
+static void vfio_enable_intp_kvm(VFIOPlatformDevice *vdev, VFIOINTp *intp)
 {
 #ifdef CONFIG_KVM
+    int argsz, ret;
+    struct vfio_irq_set *irq_set;
+    uint32_t *efd;
+
     struct kvm_irqfd irqfd = {
         .fd = event_notifier_get_fd(&intp->interrupt),
         .gsi = intp->virtualID,
@@ -476,10 +469,27 @@ static void vfio_enable_intp_kvm(VFIOINTp *intp)
         goto fail;
     }
 
+    argsz = sizeof(*irq_set) + sizeof(*efd);
+
+    irq_set = g_malloc0(argsz);
+    irq_set->argsz = argsz;
+    irq_set->flags = VFIO_IRQ_SET_DATA_EVENTFD | VFIO_IRQ_SET_ACTION_UNMASK;
+    irq_set->index = intp->pin;
+    irq_set->start = 0;
+    irq_set->count = 1;
+
     /* KVM triggers it, VFIO listens for it */
     irqfd.resamplefd = event_notifier_get_fd(&intp->unmask);
-    qemu_set_fd_handler(irqfd.resamplefd, resampler_handler, NULL, intp);
+    efd = (uint32_t *)&irq_set->data;
 
+    *efd = irqfd.resamplefd;
+
+    ret = ioctl(vdev->vdev.fd, VFIO_DEVICE_SET_IRQS, irq_set);
+    g_free(irq_set);
+    if (ret) {
+        error_report("vfio: Error: Failed to setup interrupt unmask fd: %m");
+        goto fail_irqfd;
+    }
 
     if (kvm_vm_ioctl(kvm_state, KVM_IRQFD, &irqfd)) {
         error_report("vfio: Error: Failed to setup resample irqfd: %m");
@@ -508,7 +518,7 @@ void vfio_setup_irqfd(SysBusDevice *s, int index, int virq)
     QLIST_FOREACH(intp, &vdev->intp_list, next) {
         if (intp->pin == index) {
             intp->virtualID = virq;
-            vfio_enable_intp_kvm(intp);
+            vfio_enable_intp_kvm(vdev, intp);
         }
     }
 }
