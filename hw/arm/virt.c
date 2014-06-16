@@ -37,6 +37,7 @@
 #include "sysemu/sysemu.h"
 #include "sysemu/kvm.h"
 #include "hw/boards.h"
+#include "hw/pci/pci.h"
 #include "exec/address-spaces.h"
 #include "qemu/bitops.h"
 #include "qemu/error-report.h"
@@ -66,6 +67,7 @@ enum {
     VIRT_UART,
     VIRT_MMIO,
     VIRT_RTC,
+    VIRT_PCI_CFG,
 };
 
 typedef struct MemMapEntry {
@@ -108,6 +110,7 @@ static const MemMapEntry a15memmap[] = {
     [VIRT_MMIO] =       { 0x0a000000, 0x00000200 },
     /* ...repeating for a total of NUM_VIRTIO_TRANSPORTS, each of that size */
     /* 0x10000000 .. 0x40000000 reserved for PCI */
+    [VIRT_PCI_CFG] = { 0x10000000, 0x01000000 },
     [VIRT_MEM] =        { 0x40000000, 30ULL * 1024 * 1024 * 1024 },
 };
 
@@ -381,6 +384,58 @@ static void create_rtc(const VirtBoardInfo *vbi, qemu_irq *pic)
     g_free(nodename);
 }
 
+static void create_pci_host(const VirtBoardInfo *vbi, qemu_irq *pic)
+{
+    PCIBus *pci_bus;
+    DeviceState *dev;
+    SysBusDevice *busdev;
+    uint32_t gic_phandle;
+    char *nodename;
+    hwaddr base = vbi->memmap[VIRT_PCI_CFG].base;
+    hwaddr size = vbi->memmap[VIRT_PCI_CFG].size;
+
+    nodename = g_strdup_printf("/pci@%" PRIx64, base);
+    qemu_fdt_add_subnode(vbi->fdt, nodename);
+    qemu_fdt_setprop_string(vbi->fdt, nodename, "compatible",
+                            "pci-host-cam-generic");
+    qemu_fdt_setprop_string(vbi->fdt, nodename, "device_type", "pci");
+    qemu_fdt_setprop_cell(vbi->fdt, nodename, "#address-cells", 0x3);
+    qemu_fdt_setprop_cell(vbi->fdt, nodename, "#size-cells", 0x2);
+    qemu_fdt_setprop_cell(vbi->fdt, nodename, "#interrupt-cells", 0x1);
+
+    qemu_fdt_setprop_sized_cells(vbi->fdt, nodename, "reg", 2, base, 2, size);
+
+    qemu_fdt_setprop_sized_cells(vbi->fdt, nodename, "ranges",
+        1, 0x01000000, 2, 0x00000000, 2, 0x11000000, 2, 0x00010000,
+        1, 0x02000000, 2, 0x12000000, 2, 0x12000000, 2, 0x2e000000);
+
+    gic_phandle = qemu_fdt_get_phandle(vbi->fdt, "/intc");
+    qemu_fdt_setprop_sized_cells(vbi->fdt, nodename, "interrupt-map-mask",
+        1, 0xf800, 1, 0x0, 1, 0x0, 1, 0x7);
+    qemu_fdt_setprop_sized_cells(vbi->fdt, nodename, "interrupt-map",
+        1, 0x0000, 2, 0x00000000, 1, 0x1, 1, gic_phandle, 1, 0, 1, 0x4, 1, 0x1,
+        1, 0x0800, 2, 0x00000000, 1, 0x1, 1, gic_phandle, 1, 0, 1, 0x5, 1, 0x1,
+        1, 0x1000, 2, 0x00000000, 1, 0x1, 1, gic_phandle, 1, 0, 1, 0x6, 1, 0x1,
+        1, 0x1800, 2, 0x00000000, 1, 0x1, 1, gic_phandle, 1, 0, 1, 0x7, 1, 0x1);
+
+    dev = qdev_create(NULL, "generic_pci");
+    busdev = SYS_BUS_DEVICE(dev);
+    qdev_init_nofail(dev);
+    sysbus_mmio_map(busdev, 0, base);       /* PCI config */
+    sysbus_mmio_map(busdev, 1, 0x11000000); /* PCI I/O */
+    sysbus_mmio_map(busdev, 2, 0x12000000); /* PCI memory window */
+    sysbus_connect_irq(busdev, 0, pic[4]);
+    sysbus_connect_irq(busdev, 1, pic[5]);
+    sysbus_connect_irq(busdev, 2, pic[6]);
+    sysbus_connect_irq(busdev, 3, pic[7]);
+
+    pci_bus = (PCIBus *)qdev_get_child_bus(dev, "pci");
+    pci_create_simple(pci_bus, -1, "pci-ohci");
+    pci_create_simple(pci_bus, -1, "lsi53c895a");
+
+    g_free(nodename);
+}
+
 static void create_virtio_devices(const VirtBoardInfo *vbi, qemu_irq *pic)
 {
     int i;
@@ -496,6 +551,8 @@ static void machvirt_init(MachineState *machine)
     create_gic(vbi, pic);
 
     create_uart(vbi, pic);
+
+    create_pci_host(vbi, pic);
 
     create_rtc(vbi, pic);
 
