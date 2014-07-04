@@ -79,6 +79,7 @@ static void pci_generic_host_realize(DeviceState *dev, Error **errp)
 {
     PCIVPBState *s = PCI_GEN(dev);
     SysBusDevice *sbd = SYS_BUS_DEVICE(dev);
+    hwaddr *mapping_data;
     int i;
 
     for (i = 0; i < MAX_PCI_DEVICES; i++) {
@@ -92,16 +93,19 @@ static void pci_generic_host_realize(DeviceState *dev, Error **errp)
      * 0 : PCI config window
      * 1 : PCI IO window
      * 2 : PCI memory windows
+     * The CPU addresses and size of each memory region have been set by the
+     * machine code inside s->dt_data.
      */
+    mapping_data = s->dt_data.addr_mapping;
     memory_region_init_io(&s->mem_config, OBJECT(s), &pci_vpb_config_ops, s,
-                          "pci-config", 0x1000000);
+                          "pci-config", mapping_data[1]);
     sysbus_init_mmio(sbd, &s->mem_config);
 
     /* The window into I/O space is always into a fixed base address;
      * its size is the same for both realview and versatile.
      */
     memory_region_init_alias(&s->pci_io_window, OBJECT(s), "pci-io-win",
-                             &s->pci_io_space, 0, 0x10000);
+                    &s->pci_io_space, mapping_data[2], mapping_data[3]);
     sysbus_init_mmio(sbd, &s->pci_io_space);
 
     /* Create the alias regions corresponding to our three windows onto
@@ -109,7 +113,7 @@ static void pci_generic_host_realize(DeviceState *dev, Error **errp)
      * offsets are guest controllable via the IMAP registers.
      */
     memory_region_init_alias(&s->pci_mem_window, OBJECT(s), "pci-mem-win",
-                             &s->pci_mem_space, 0x12000000, 0x2e000000);
+                     &s->pci_mem_space, mapping_data[4], mapping_data[5]);
     sysbus_init_mmio(sbd, &s->pci_mem_window);
 
     /* TODO Remove once realize propagates to child devices. */
