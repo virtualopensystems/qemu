@@ -84,6 +84,7 @@ typedef struct VirtBoardInfo {
     void *fdt;
     int fdt_size;
     uint32_t clock_phandle;
+    qemu_irq pic[NUM_IRQS];
 } VirtBoardInfo;
 
 /* Addresses and sizes of our components.
@@ -481,7 +482,6 @@ static void *machvirt_dtb(const struct arm_boot_info *binfo, int *fdt_size)
 
 static void machvirt_init(MachineState *machine)
 {
-    qemu_irq pic[NUM_IRQS];
     MemoryRegion *sysmem = get_system_memory();
     int n;
     MemoryRegion *ram = g_new(MemoryRegion, 1);
@@ -493,6 +493,7 @@ static void machvirt_init(MachineState *machine)
     }
 
     vbi = find_machine_info(cpu_model);
+    qemu_irq *pic = vbi->pic;
 
     if (!vbi) {
         error_report("mach-virt: CPU %s not supported", cpu_model);
