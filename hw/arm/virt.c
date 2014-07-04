@@ -42,7 +42,6 @@
 #include "qemu/bitops.h"
 #include "qemu/error-report.h"
 
-#define NUM_VIRTIO_TRANSPORTS 32
 
 /* Number of external interrupt lines to configure the GIC with */
 #define NUM_IRQS 128
@@ -65,9 +64,16 @@ enum {
     VIRT_GIC_DIST,
     VIRT_GIC_CPU,
     VIRT_UART,
-    VIRT_MMIO,
+#define UART_IRQ 1
     VIRT_RTC,
+#define RTC_IRQ 2
+    VIRT_MMIO,
+#define NUM_VIRTIO_TRANSPORTS 32
+#define VIRTIO_BASE_IRQ 16
     VIRT_PCI_CFG,
+    VIRT_PCI_IO,
+    VIRT_PCI_MEM,
+#define PCI_BASE_IRQ (VIRTIO_BASE_IRQ + NUM_VIRTIO_TRANSPORTS - 1)
 };
 
 typedef struct MemMapEntry {
@@ -112,13 +118,16 @@ static const MemMapEntry a15memmap[] = {
     /* ...repeating for a total of NUM_VIRTIO_TRANSPORTS, each of that size */
     /* 0x10000000 .. 0x40000000 reserved for PCI */
     [VIRT_PCI_CFG] = { 0x10000000, 0x01000000 },
+    [VIRT_PCI_IO] = { 0x11000000, 0x00010000 },
+    [VIRT_PCI_MEM] = { 0x12000000, 0x2e000000 },
     [VIRT_MEM] =        { 0x40000000, 30ULL * 1024 * 1024 * 1024 },
 };
 
 static const int a15irqmap[] = {
-    [VIRT_UART] = 1,
-    [VIRT_RTC] = 2,
-    [VIRT_MMIO] = 16, /* ...to 16 + NUM_VIRTIO_TRANSPORTS - 1 */
+    [VIRT_UART] = UART_IRQ,
+    [VIRT_RTC] = RTC_IRQ,
+    [VIRT_MMIO] = VIRTIO_BASE_IRQ, /* ...to 16 + NUM_VIRTIO_TRANSPORTS - 1 */
+    [VIRT_PCI_CFG] = PCI_BASE_IRQ,
 };
 
 static VirtBoardInfo machines[] = {
@@ -392,10 +401,14 @@ static void create_pci_host(const VirtBoardInfo *vbi, qemu_irq *pic)
     SysBusDevice *busdev;
     uint32_t gic_phandle;
     char *nodename;
-    hwaddr base = vbi->memmap[VIRT_PCI_CFG].base;
-    hwaddr size = vbi->memmap[VIRT_PCI_CFG].size;
+    hwaddr cfg_base = vbi->memmap[VIRT_PCI_CFG].base;
+    hwaddr cfg_size = vbi->memmap[VIRT_PCI_CFG].size;
+    hwaddr io_base = vbi->memmap[VIRT_PCI_IO].base;
+    hwaddr io_size = vbi->memmap[VIRT_PCI_IO].size;
+    hwaddr mem_base = vbi->memmap[VIRT_PCI_MEM].base;
+    hwaddr mem_size = vbi->memmap[VIRT_PCI_MEM].size;
 
-    nodename = g_strdup_printf("/pci@%" PRIx64, base);
+    nodename = g_strdup_printf("/pci@%" PRIx64, cfg_base);
     qemu_fdt_add_subnode(vbi->fdt, nodename);
     qemu_fdt_setprop_string(vbi->fdt, nodename, "compatible",
                             "pci-host-cam-generic");
@@ -404,11 +417,12 @@ static void create_pci_host(const VirtBoardInfo *vbi, qemu_irq *pic)
     qemu_fdt_setprop_cell(vbi->fdt, nodename, "#size-cells", 0x2);
     qemu_fdt_setprop_cell(vbi->fdt, nodename, "#interrupt-cells", 0x1);
 
-    qemu_fdt_setprop_sized_cells(vbi->fdt, nodename, "reg", 2, base, 2, size);
+    qemu_fdt_setprop_sized_cells(vbi->fdt, nodename, "reg", 2, cfg_base,
+                                                           2, cfg_size);
 
     qemu_fdt_setprop_sized_cells(vbi->fdt, nodename, "ranges",
-        1, 0x01000000, 2, 0x00000000, 2, 0x11000000, 2, 0x00010000,
-        1, 0x02000000, 2, 0x12000000, 2, 0x12000000, 2, 0x2e000000);
+        1, 0x01000000, 2, 0x00000000, 2, io_base, 2, io_size,
+        1, 0x02000000, 2, 0x12000000, 2, mem_size, 2, mem_size);
 
     gic_phandle = qemu_fdt_get_phandle(vbi->fdt, "/intc");
     qemu_fdt_setprop_sized_cells(vbi->fdt, nodename, "interrupt-map-mask",
@@ -422,9 +436,9 @@ static void create_pci_host(const VirtBoardInfo *vbi, qemu_irq *pic)
     dev = qdev_create(NULL, "generic_pci");
     busdev = SYS_BUS_DEVICE(dev);
     qdev_init_nofail(dev);
-    sysbus_mmio_map(busdev, 0, base);       /* PCI config */
-    sysbus_mmio_map(busdev, 1, 0x11000000); /* PCI I/O */
-    sysbus_mmio_map(busdev, 2, 0x12000000); /* PCI memory window */
+    sysbus_mmio_map(busdev, 0, cfg_base); /* PCI config */
+    sysbus_mmio_map(busdev, 1, io_base);  /* PCI I/O */
+    sysbus_mmio_map(busdev, 2, mem_base); /* PCI memory window */
     sysbus_connect_irq(busdev, 0, pic[4]);
     sysbus_connect_irq(busdev, 1, pic[5]);
     sysbus_connect_irq(busdev, 2, pic[6]);
