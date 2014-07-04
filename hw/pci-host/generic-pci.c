@@ -14,6 +14,7 @@
 #include "hw/sysbus.h"
 #include "hw/pci-host/pci_generic.h"
 #include "exec/address-spaces.h"
+#include "sysemu/device_tree.h"
 
 static const VMStateDescription pci_generic_host_vmstate = {
     .name = "generic-host-pci",
@@ -130,6 +131,96 @@ static void pci_generic_host_class_init(ObjectClass *klass, void *data)
     dc->cannot_instantiate_with_device_add_yet = true;
 }
 
+struct dt_irq_mapping {
+        DeviceState *dev;
+        uint32_t gic_phandle;
+        int base_irq_num;
+        uint64_t *data;
+};
+
+#define IRQ_MAPPING_CELLS 14
+/* Generate the irq_mapping data and return the number of the device attached
+ * to the device bus.
+ * */
+static int generate_int_mapping(struct dt_irq_mapping *irq_map)
+{
+    BusState *inner_bus;
+    BusChild *inner;
+    int num_slots = 0;
+    uint64_t *data_ptr = irq_map->data;
+
+    QLIST_FOREACH(inner_bus, &irq_map->dev->child_bus, sibling) {
+        QTAILQ_FOREACH(inner, &inner_bus->children, sibling) {
+            DeviceState *dev = inner->child;
+            PCIDevice *pdev = PCI_DEVICE(dev);
+            int pci_slot = PCI_SLOT(pdev->devfn);
+
+            uint64_t buffer[IRQ_MAPPING_CELLS] =
+            {1, pci_slot << 11, 2, 0x00000000, 1, 0x1,
+             1, irq_map->gic_phandle, 1, 0, 1, irq_map->base_irq_num + pci_slot,
+             1, 0x1};
+
+            memcpy(data_ptr, buffer, IRQ_MAPPING_CELLS * sizeof(*buffer));
+            num_slots++;
+            data_ptr += IRQ_MAPPING_CELLS;
+        }
+    }
+
+    return num_slots;
+}
+
+static void generate_dt_node(DeviceState *dev)
+{
+    PCIVPBState *s = PCI_GEN(dev);
+    char *nodename;
+    uint32_t gic_phandle;
+    int num_dev;
+    hwaddr *map = s->dt_data.addr_mapping;
+    void *fdt = s->dt_data.fdt;
+
+    nodename = g_strdup_printf("/pci@%" PRIx64, map[0]);
+    qemu_fdt_add_subnode(fdt, nodename);
+    qemu_fdt_setprop_string(fdt, nodename, "compatible",
+                            "pci-host-cam-generic");
+    qemu_fdt_setprop_string(fdt, nodename, "device_type", "pci");
+    qemu_fdt_setprop_cell(fdt, nodename, "#address-cells", 0x3);
+    qemu_fdt_setprop_cell(fdt, nodename, "#size-cells", 0x2);
+    qemu_fdt_setprop_cell(fdt, nodename, "#interrupt-cells", 0x1);
+
+    /* config space */
+    qemu_fdt_setprop_sized_cells(fdt, nodename, "reg", 2, map[0],
+                                                            2, map[1]);
+
+    qemu_fdt_setprop_sized_cells(fdt, nodename, "ranges",
+         1, 0x01000000, 2, 0x00000000, 2, map[2], 2, map[3],
+         1, 0x02000000, 2, 0x12000000, 2, map[4], 2, map[5]);
+
+    gic_phandle = qemu_fdt_get_phandle(fdt, "/intc");
+    qemu_fdt_setprop_sized_cells(fdt, nodename, "interrupt-map-mask",
+                                  1, 0xf800, 1, 0x0, 1, 0x0, 1, 0x7);
+
+    /* Generate the interrupt mapping according to the devices attached
+     * to the PCI bus of the device. */
+    uint64_t *int_mapping_data = g_malloc0(IRQ_MAPPING_CELLS * sizeof(uint64_t)
+                                                            * MAX_PCI_DEVICES);
+
+    struct dt_irq_mapping dt_map = {
+        .dev = dev,
+        .gic_phandle = gic_phandle,
+        .base_irq_num = s->dt_data.irq_base,
+        .data = int_mapping_data
+    };
+
+    num_dev = generate_int_mapping(&dt_map);
+    qemu_fdt_setprop_sized_cells_from_array(fdt, nodename, "interrupt-map",
+                        (num_dev * IRQ_MAPPING_CELLS)/2, int_mapping_data);
+
+    g_free(int_mapping_data);
+    g_free(nodename);
+    /* Once the dt node is created, this data is no longer necessary */
+    g_free(s->dt_data.addr_mapping);
+}
+
 static const TypeInfo pci_generic_host_info = {
     .name          = TYPE_GENERIC_PCI_HOST,
     .parent        = TYPE_PCI_DEVICE,
@@ -140,9 +231,11 @@ static const TypeInfo pci_generic_host_info = {
 static void pci_generic_class_init(ObjectClass *klass, void *data)
 {
     DeviceClass *dc = DEVICE_CLASS(klass);
+    GenericPCIClass *pc = GENERIC_PCI_CLASS(klass);
 
     dc->realize = pci_generic_host_realize;
     dc->vmsd = &pci_generic_host_vmstate;
+    pc->gen_dt_node = generate_dt_node;
 }
 
 static const TypeInfo pci_generic_info = {
@@ -151,6 +244,7 @@ static const TypeInfo pci_generic_info = {
     .instance_size = sizeof(PCIVPBState),
     .instance_init = pci_generic_host_init,
     .class_init    = pci_generic_class_init,
+    .class_size    = sizeof(GenericPCIClass),
 };
 
 static void generic_pci_host_register_types(void)

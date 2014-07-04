@@ -400,44 +400,35 @@ static void create_pci_host(const VirtBoardInfo *vbi, qemu_irq *pic)
     PCIBus *pci_bus;
     DeviceState *dev;
     SysBusDevice *busdev;
-    uint32_t gic_phandle;
-    char *nodename;
-    int i;
+    PCIVPBState *ps;
+    int i, count = 0;
     hwaddr cfg_base = vbi->memmap[VIRT_PCI_CFG].base;
-    hwaddr cfg_size = vbi->memmap[VIRT_PCI_CFG].size;
     hwaddr io_base = vbi->memmap[VIRT_PCI_IO].base;
-    hwaddr io_size = vbi->memmap[VIRT_PCI_IO].size;
     hwaddr mem_base = vbi->memmap[VIRT_PCI_MEM].base;
-    hwaddr mem_size = vbi->memmap[VIRT_PCI_MEM].size;
-
-    nodename = g_strdup_printf("/pci@%" PRIx64, cfg_base);
-    qemu_fdt_add_subnode(vbi->fdt, nodename);
-    qemu_fdt_setprop_string(vbi->fdt, nodename, "compatible",
-                            "pci-host-cam-generic");
-    qemu_fdt_setprop_string(vbi->fdt, nodename, "device_type", "pci");
-    qemu_fdt_setprop_cell(vbi->fdt, nodename, "#address-cells", 0x3);
-    qemu_fdt_setprop_cell(vbi->fdt, nodename, "#size-cells", 0x2);
-    qemu_fdt_setprop_cell(vbi->fdt, nodename, "#interrupt-cells", 0x1);
-
-    qemu_fdt_setprop_sized_cells(vbi->fdt, nodename, "reg", 2, cfg_base,
-                                                           2, cfg_size);
-
-    qemu_fdt_setprop_sized_cells(vbi->fdt, nodename, "ranges",
-        1, 0x01000000, 2, 0x00000000, 2, io_base, 2, io_size,
-        1, 0x02000000, 2, 0x12000000, 2, mem_size, 2, mem_size);
-
-    gic_phandle = qemu_fdt_get_phandle(vbi->fdt, "/intc");
-    qemu_fdt_setprop_sized_cells(vbi->fdt, nodename, "interrupt-map-mask",
-        1, 0xf800, 1, 0x0, 1, 0x0, 1, 0x7);
-    qemu_fdt_setprop_sized_cells(vbi->fdt, nodename, "interrupt-map",
-        1, 0x0000, 2, 0x00000000, 1, 0x1, 1, gic_phandle, 1, 0, 1, 0x4, 1, 0x1,
-        1, 0x0800, 2, 0x00000000, 1, 0x1, 1, gic_phandle, 1, 0, 1, 0x5, 1, 0x1,
-        1, 0x1000, 2, 0x00000000, 1, 0x1, 1, gic_phandle, 1, 0, 1, 0x6, 1, 0x1,
-        1, 0x1800, 2, 0x00000000, 1, 0x1, 1, gic_phandle, 1, 0, 1, 0x7, 1, 0x1);
 
     dev = qdev_create(NULL, "generic_pci");
     busdev = SYS_BUS_DEVICE(dev);
+    ps = PCI_GEN(dev);
+
+    /* Set the mapping data in the device structure where:
+     * ptr[i] = base address
+     * ptr[i+1] = size
+     * i = 0 => config
+     * i = 2 => I/O
+     * i = 4 => memory
+     * These values are needed by the specific device code.
+     * */
+    hwaddr *ptr = g_malloc(6 * sizeof(hwaddr));
+    for (i = VIRT_PCI_CFG; i <= VIRT_PCI_MEM; i++) {
+        ptr[count++] = vbi->memmap[i].base;
+        ptr[count++] = vbi->memmap[i].size;
+    }
+    ps->dt_data.fdt = vbi->fdt;
+    ps->dt_data.irq_base = vbi->irqmap[VIRT_PCI_CFG];
+    ps->dt_data.addr_mapping = ptr;
+
     qdev_init_nofail(dev);
+
     sysbus_mmio_map(busdev, 0, cfg_base); /* PCI config */
     sysbus_mmio_map(busdev, 1, io_base);  /* PCI I/O */
     sysbus_mmio_map(busdev, 2, mem_base); /* PCI memory window */
@@ -449,8 +440,6 @@ static void create_pci_host(const VirtBoardInfo *vbi, qemu_irq *pic)
     pci_bus = (PCIBus *)qdev_get_child_bus(dev, "pci");
     pci_create_simple(pci_bus, -1, "pci-ohci");
     pci_create_simple(pci_bus, -1, "lsi53c895a");
-
-    g_free(nodename);
 }
 
 static void create_virtio_devices(const VirtBoardInfo *vbi, qemu_irq *pic)
@@ -494,6 +483,29 @@ static void *machvirt_dtb(const struct arm_boot_info *binfo, int *fdt_size)
 
     *fdt_size = board->fdt_size;
     return board->fdt;
+}
+
+static void machvirt_finalize_dt(MachineState *machine)
+{
+    BusState *bus;
+    BusChild *child;
+    VirtBoardInfo *vbi;
+    /* TODO store somewhere the CPU model used */
+    vbi = find_machine_info("cortex-a15");
+
+    /* If the device has been successfully created, create also its
+     * device node in the dt. */
+    bus = sysbus_get_default();
+    QTAILQ_FOREACH(child, &bus->children, sibling) {
+        DeviceState *dev = child->child;
+        if (!strcmp(object_get_typename(OBJECT(dev)), TYPE_GENERIC_PCI)) {
+            GenericPCIClass *gpci = GENERIC_PCI_GET_CLASS(OBJECT(dev));
+            /* create device tree node */
+            gpci->gen_dt_node(dev);
+        }
+    }
+
+    arm_load_kernel(ARM_CPU(first_cpu), &vbi->bootinfo);
 }
 
 static void machvirt_init(MachineState *machine)
@@ -587,13 +599,13 @@ static void machvirt_init(MachineState *machine)
     vbi->bootinfo.board_id = -1;
     vbi->bootinfo.loader_start = vbi->memmap[VIRT_MEM].base;
     vbi->bootinfo.get_dtb = machvirt_dtb;
-    arm_load_kernel(ARM_CPU(first_cpu), &vbi->bootinfo);
 }
 
 static QEMUMachine machvirt_a15_machine = {
     .name = "virt",
     .desc = "ARM Virtual Machine",
     .init = machvirt_init,
+    .finalize_dt = machvirt_finalize_dt,
     .max_cpus = 4,
 };
 
