@@ -14,6 +14,17 @@ struct dt_data {
 };
 
 typedef struct {
+    PCIDevice parent_obj;
+
+    struct irqmap {
+        /* slot_idx_map[i] = index inside slot_irq_map for device at slot i */
+        uint8_t slot_idx_map[PCI_SLOT_MAX];
+        /* slot_irq_map[i] = irq num. of the i-th device attached to the bus */
+        uint8_t slot_irq_map[MAX_PCI_DEVICES];
+    } irqmap;
+} GenericPCIHostState;
+
+typedef struct {
     PCIHostState parent_obj;
 
     qemu_irq irq[MAX_PCI_DEVICES];
@@ -27,7 +38,7 @@ typedef struct {
     MemoryRegion pci_io_window;
     MemoryRegion pci_mem_window;
     PCIBus pci_bus;
-    PCIDevice pci_dev;
+    GenericPCIHostState pci_gen;
     /* Device tree data set by the machine
      */
     struct dt_data dt_data;
@@ -45,7 +56,7 @@ typedef struct GenericPCIClass {
 
 #define TYPE_GENERIC_PCI_HOST "generic_pci_host"
 #define PCI_GEN_HOST(obj) \
-    OBJECT_CHECK(PCIDevice, (obj), TYPE_GENERIC_PCIHOST)
+    OBJECT_CHECK(GenericPCIHostState, (obj), TYPE_GENERIC_PCI_HOST)
 
 #define GENERIC_PCI_CLASS(klass) \
      OBJECT_CLASS_CHECK(GenericPCIClass, (klass), TYPE_GENERIC_PCI)

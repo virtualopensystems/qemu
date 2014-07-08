@@ -62,14 +62,19 @@ static void pci_generic_host_init(Object *obj)
                         PCI_DEVFN(0, 0), TYPE_PCIE_BUS);
     h->bus = &s->pci_bus;
 
-    object_initialize(&s->pci_dev, sizeof(s->pci_dev), TYPE_GENERIC_PCI_HOST);
-    qdev_set_parent_bus(DEVICE(&s->pci_dev), BUS(&s->pci_bus));
+    object_initialize(&s->pci_gen, sizeof(s->pci_gen), TYPE_GENERIC_PCI_HOST);
+    qdev_set_parent_bus(DEVICE(&s->pci_gen), BUS(&s->pci_bus));
 }
 
 static int generic_pci_map_irq_fn(PCIDevice *pci_dev, int pin)
 {
+    BusState *bus = qdev_get_parent_bus(&pci_dev->qdev);
+    PCIBus *pci_bus = PCI_BUS(bus);
+    PCIDevice *pdev = pci_bus->devices[PCI_DEVFN(0, 0)];
+    GenericPCIHostState *gps = PCI_GEN_HOST(pdev);
+
     if (!pin) {
-        return PCI_SLOT(pci_dev->devfn);
+        return gps->irqmap.slot_idx_map[PCI_SLOT(pci_dev->devfn)];
     }
 
     hw_error("generic_pci: only one pin per device supported.");
@@ -117,7 +122,7 @@ static void pci_generic_host_realize(DeviceState *dev, Error **errp)
     sysbus_init_mmio(sbd, &s->pci_mem_window);
 
     /* TODO Remove once realize propagates to child devices. */
-    object_property_set_bool(OBJECT(&s->pci_dev), true, "realized", errp);
+    object_property_set_bool(OBJECT(&s->pci_gen), true, "realized", errp);
 }
 
 static void pci_generic_host_class_init(ObjectClass *klass, void *data)
@@ -146,11 +151,11 @@ struct dt_irq_mapping {
 /* Generate the irq_mapping data and return the number of the device attached
  * to the device bus.
  * */
-static int generate_int_mapping(struct dt_irq_mapping *irq_map)
+static int generate_int_mapping(struct dt_irq_mapping *irq_map, PCIVPBState *s)
 {
     BusState *inner_bus;
     BusChild *inner;
-    int num_slots = 0;
+    int slot_count = 0;
     uint64_t *data_ptr = irq_map->data;
 
     QLIST_FOREACH(inner_bus, &irq_map->dev->child_bus, sibling) {
@@ -158,19 +163,29 @@ static int generate_int_mapping(struct dt_irq_mapping *irq_map)
             DeviceState *dev = inner->child;
             PCIDevice *pdev = PCI_DEVICE(dev);
             int pci_slot = PCI_SLOT(pdev->devfn);
+            uint8_t *slot_idx = s->pci_gen.irqmap.slot_idx_map;
+            uint8_t *slot_irq = s->pci_gen.irqmap.slot_irq_map;
+
+            if (slot_count > MAX_PCI_DEVICES) {
+                hw_error("generic_pci: too many PCI devices.");
+            }
+
+            /* Every PCI slot has one interrupt mapped. */
+            slot_idx[pci_slot] = slot_count;
+            slot_irq[slot_count] = irq_map->base_irq_num + slot_count;
 
             uint64_t buffer[IRQ_MAPPING_CELLS] =
             {1, pci_slot << 11, 2, 0x00000000, 1, 0x1,
-             1, irq_map->gic_phandle, 1, 0, 1, irq_map->base_irq_num + pci_slot,
+             1, irq_map->gic_phandle, 1, 0, 1, slot_irq[slot_count],
              1, 0x1};
 
             memcpy(data_ptr, buffer, IRQ_MAPPING_CELLS * sizeof(*buffer));
-            num_slots++;
+            slot_count++;
             data_ptr += IRQ_MAPPING_CELLS;
         }
     }
 
-    return num_slots;
+    return slot_count;
 }
 
 static void generate_dt_node(DeviceState *dev)
@@ -215,7 +230,7 @@ static void generate_dt_node(DeviceState *dev)
         .data = int_mapping_data
     };
 
-    num_dev = generate_int_mapping(&dt_map);
+    num_dev = generate_int_mapping(&dt_map, s);
     qemu_fdt_setprop_sized_cells_from_array(fdt, nodename, "interrupt-map",
                         (num_dev * IRQ_MAPPING_CELLS)/2, int_mapping_data);
 
@@ -228,7 +243,7 @@ static void generate_dt_node(DeviceState *dev)
 static const TypeInfo pci_generic_host_info = {
     .name          = TYPE_GENERIC_PCI_HOST,
     .parent        = TYPE_PCI_DEVICE,
-    .instance_size = sizeof(PCIDevice),
+    .instance_size = sizeof(GenericPCIHostState),
     .class_init    = pci_generic_host_class_init,
 };
 
