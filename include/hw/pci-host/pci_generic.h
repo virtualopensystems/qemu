@@ -5,10 +5,12 @@
 #include "hw/pci/pci_bus.h"
 #include "hw/pci/pci_host.h"
 
+#define MAX_PCI_DEVICES 10
+
 typedef struct {
     PCIHostState parent_obj;
 
-    qemu_irq irq[4];
+    qemu_irq irq[MAX_PCI_DEVICES];
     MemoryRegion mem_config;
     /* Containers representing the PCI address spaces */
     MemoryRegion pci_io_space;

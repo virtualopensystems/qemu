@@ -41,6 +41,7 @@
 #include "exec/address-spaces.h"
 #include "qemu/bitops.h"
 #include "qemu/error-report.h"
+#include "hw/pci-host/pci_generic.h"
 
 
 /* Number of external interrupt lines to configure the GIC with */
@@ -401,6 +402,7 @@ static void create_pci_host(const VirtBoardInfo *vbi, qemu_irq *pic)
     SysBusDevice *busdev;
     uint32_t gic_phandle;
     char *nodename;
+    int i;
     hwaddr cfg_base = vbi->memmap[VIRT_PCI_CFG].base;
     hwaddr cfg_size = vbi->memmap[VIRT_PCI_CFG].size;
     hwaddr io_base = vbi->memmap[VIRT_PCI_IO].base;
@@ -439,10 +441,10 @@ static void create_pci_host(const VirtBoardInfo *vbi, qemu_irq *pic)
     sysbus_mmio_map(busdev, 0, cfg_base); /* PCI config */
     sysbus_mmio_map(busdev, 1, io_base);  /* PCI I/O */
     sysbus_mmio_map(busdev, 2, mem_base); /* PCI memory window */
-    sysbus_connect_irq(busdev, 0, pic[4]);
-    sysbus_connect_irq(busdev, 1, pic[5]);
-    sysbus_connect_irq(busdev, 2, pic[6]);
-    sysbus_connect_irq(busdev, 3, pic[7]);
+
+    for ( i = 0; i < MAX_PCI_DEVICES; i++) {
+        sysbus_connect_irq(busdev, i, pic[vbi->irqmap[VIRT_PCI_CFG] + i]);
+    }
 
     pci_bus = (PCIBus *)qdev_get_child_bus(dev, "pci");
     pci_create_simple(pci_bus, -1, "pci-ohci");

@@ -65,18 +65,27 @@ static void pci_generic_host_init(Object *obj)
     qdev_set_parent_bus(DEVICE(&s->pci_dev), BUS(&s->pci_bus));
 }
 
+static int generic_pci_map_irq_fn(PCIDevice *pci_dev, int pin)
+{
+    if (!pin) {
+        return PCI_SLOT(pci_dev->devfn);
+    }
+
+    hw_error("generic_pci: only one pin per device supported.");
+}
+
 static void pci_generic_host_realize(DeviceState *dev, Error **errp)
 {
     PCIVPBState *s = PCI_GEN(dev);
     SysBusDevice *sbd = SYS_BUS_DEVICE(dev);
     int i;
 
-    for (i = 0; i < 4; i++) {
+    for (i = 0; i < MAX_PCI_DEVICES; i++) {
         sysbus_init_irq(sbd, &s->irq[i]);
     }
 
-    pci_bus_irqs(&s->pci_bus, pci_generic_set_irq, pci_swizzle_map_irq_fn,
-                 s->irq, 4);
+    pci_bus_irqs(&s->pci_bus, pci_generic_set_irq, generic_pci_map_irq_fn,
+                 s->irq, MAX_PCI_DEVICES);
 
     /* Our memory regions are:
      * 0 : PCI config window
