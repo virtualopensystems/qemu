@@ -19,12 +19,15 @@ typedef void QEMUMachineHotAddCPUFunc(const int64_t id, Error **errp);
 
 typedef int QEMUMachineGetKvmtypeFunc(const char *arg);
 
+typedef void QEMUMachineFinalizeDtFunc(MachineState *ms);
+
 struct QEMUMachine {
     const char *name;
     const char *alias;
     const char *desc;
     QEMUMachineInitFunc *init;
     QEMUMachineResetFunc *reset;
+    QEMUMachineFinalizeDtFunc *finalize_dt;
     QEMUMachineHotAddCPUFunc *hot_add_cpu;
     QEMUMachineGetKvmtypeFunc *kvm_type;
     BlockInterfaceType block_default_type;
@@ -82,6 +85,7 @@ struct MachineClass {
 
     void (*init)(MachineState *state);
     void (*reset)(void);
+    void (*finalize_dt)(MachineState *state);
     void (*hot_add_cpu)(const int64_t id, Error **errp);
     int (*kvm_type)(const char *arg);
 

@@ -1557,6 +1557,7 @@ static void machine_class_init(ObjectClass *oc, void *data)
     mc->alias = qm->alias;
     mc->desc = qm->desc;
     mc->init = qm->init;
+    mc->finalize_dt = qm->finalize_dt;
     mc->reset = qm->reset;
     mc->hot_add_cpu = qm->hot_add_cpu;
     mc->kvm_type = qm->kvm_type;
@@ -4424,6 +4425,10 @@ int main(int argc, char **argv, char **envp)
     /* init generic devices */
     if (qemu_opts_foreach(qemu_find_opts("device"), device_init_func, NULL, 1) != 0)
         exit(1);
+
+    if (machine_class->finalize_dt) {
+        machine_class->finalize_dt(current_machine);
+    }
 
     net_check_clients();
 
