@@ -94,6 +94,18 @@ typedef struct VirtBoardInfo {
     qemu_irq pic[NUM_IRQS];
 } VirtBoardInfo;
 
+typedef struct VirtBoardState {
+    VirtBoardInfo *vbi;
+} VirtBoardState;
+
+static VirtBoardState *get_virt_state(void)
+{
+    static VirtBoardState vbstate;
+
+    return &vbstate;
+}
+
+
 /* Addresses and sizes of our components.
  * 0..128MB is space for a flash device so we can run bootrom code such as UEFI.
  * 128MB..256MB is used for miscellaneous device I/O.
@@ -489,9 +501,8 @@ static void machvirt_finalize_dt(MachineState *machine)
 {
     BusState *bus;
     BusChild *child;
-    VirtBoardInfo *vbi;
-    /* TODO store somewhere the CPU model used */
-    vbi = find_machine_info("cortex-a15");
+    VirtBoardState *vbs = get_virt_state();
+    VirtBoardInfo *vbi = vbs->vbi;
 
     /* If the device has been successfully created, create also its
      * device node in the dt. */
@@ -515,12 +526,14 @@ static void machvirt_init(MachineState *machine)
     MemoryRegion *ram = g_new(MemoryRegion, 1);
     const char *cpu_model = machine->cpu_model;
     VirtBoardInfo *vbi;
+    VirtBoardState *vbs = get_virt_state();
 
     if (!cpu_model) {
         cpu_model = "cortex-a15";
     }
 
-    vbi = find_machine_info(cpu_model);
+    vbs->vbi = find_machine_info(cpu_model);
+    vbi = vbs->vbi;
     qemu_irq *pic = vbi->pic;
 
     if (!vbi) {
