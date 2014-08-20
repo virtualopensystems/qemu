@@ -62,10 +62,8 @@
 
 /* Limit the number of packets that can be sent via a single flush
  * of the TX queue.  This gives us a guaranteed exit condition and
- * ensures fairness in the io path.  256 conveniently matches the
- * length of the TX queue and shows a good balance of performance
- * and latency. */
-#define TX_BURST 256
+ * ensures fairness in the io path.  */
+#define TX_BURST VIRTQUEUE_MAX_SIZE
 
 typedef struct virtio_net_conf
 {

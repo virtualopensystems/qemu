@@ -1289,16 +1289,16 @@ static void virtio_net_set_multiqueue(VirtIONet *n, int multiqueue)
     }
 
     for (i = 1; i < max; i++) {
-        n->vqs[i].rx_vq = virtio_add_queue(vdev, 256, virtio_net_handle_rx);
+        n->vqs[i].rx_vq = virtio_add_queue(vdev, VIRTQUEUE_MAX_SIZE, virtio_net_handle_rx);
         if (n->vqs[i].tx_timer) {
             n->vqs[i].tx_vq =
-                virtio_add_queue(vdev, 256, virtio_net_handle_tx_timer);
+                virtio_add_queue(vdev, VIRTQUEUE_MAX_SIZE, virtio_net_handle_tx_timer);
             n->vqs[i].tx_timer = timer_new_ns(QEMU_CLOCK_VIRTUAL,
                                                    virtio_net_tx_timer,
                                                    &n->vqs[i]);
         } else {
             n->vqs[i].tx_vq =
-                virtio_add_queue(vdev, 256, virtio_net_handle_tx_bh);
+                virtio_add_queue(vdev, VIRTQUEUE_MAX_SIZE, virtio_net_handle_tx_bh);
             n->vqs[i].tx_bh = qemu_bh_new(virtio_net_tx_bh, &n->vqs[i]);
         }
 
@@ -1572,7 +1572,7 @@ static void virtio_net_device_realize(DeviceState *dev, Error **errp)
 
     n->max_queues = MAX(n->nic_conf.peers.queues, 1);
     n->vqs = g_malloc0(sizeof(VirtIONetQueue) * n->max_queues);
-    n->vqs[0].rx_vq = virtio_add_queue(vdev, 256, virtio_net_handle_rx);
+    n->vqs[0].rx_vq = virtio_add_queue(vdev, VIRTQUEUE_MAX_SIZE, virtio_net_handle_rx);
     n->curr_queues = 1;
     n->vqs[0].n = n;
     n->tx_timeout = n->net_conf.txtimer;
@@ -1586,12 +1586,12 @@ static void virtio_net_device_realize(DeviceState *dev, Error **errp)
     }
 
     if (n->net_conf.tx && !strcmp(n->net_conf.tx, "timer")) {
-        n->vqs[0].tx_vq = virtio_add_queue(vdev, 256,
+        n->vqs[0].tx_vq = virtio_add_queue(vdev, VIRTQUEUE_MAX_SIZE,
                                            virtio_net_handle_tx_timer);
         n->vqs[0].tx_timer = timer_new_ns(QEMU_CLOCK_VIRTUAL, virtio_net_tx_timer,
                                                &n->vqs[0]);
     } else {
-        n->vqs[0].tx_vq = virtio_add_queue(vdev, 256,
+        n->vqs[0].tx_vq = virtio_add_queue(vdev, VIRTQUEUE_MAX_SIZE,
                                            virtio_net_handle_tx_bh);
         n->vqs[0].tx_bh = qemu_bh_new(virtio_net_tx_bh, &n->vqs[0]);
     }
