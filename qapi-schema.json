@@ -2203,12 +2203,15 @@
 #
 # @vhostforce: #optional vhost on for non-MSIX virtio guests (default: false).
 #
+# @queues: #optional number of queues to be created for multiqueue vhost-user
+#
 # Since 2.1
 ##
 { 'type': 'NetdevVhostUserOptions',
   'data': {
     'chardev':        'str',
-    '*vhostforce':    'bool' } }
+    '*vhostforce':    'bool',
+    '*queues':        'uint32' } }
 
 ##
 # @NetClientOptions
