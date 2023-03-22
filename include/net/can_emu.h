@@ -3,6 +3,7 @@
  *
  * Copyright (c) 2013-2014 Jin Yang
  * Copyright (c) 2014-2018 Pavel Pisa
+ * Modifications by OpenSynergy GmbH. Copyright (c) 2023 OpenSynergy GmbH
  *
  * Initial development supported by Google GSoC 2013 from RTEMS project slot
  *
@@ -62,6 +63,8 @@ typedef struct qemu_can_frame {
 #define QEMU_CAN_FRMF_BRS     0x01 /* bit rate switch (2nd bitrate for data) */
 #define QEMU_CAN_FRMF_ESI     0x02 /* error state ind. of transmitting node */
 #define QEMU_CAN_FRMF_TYPE_FD 0x10 /* internal bit ind. of CAN FD frame */
+
+#define QEMU_CAN_ERR_BUSOFF 0x00000040U /* bus off */
 
 /**
  * struct qemu_can_filter - CAN ID based filter in can_register().

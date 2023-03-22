@@ -3,6 +3,7 @@
  *
  * Copyright (c) 2013-2014 Jin Yang
  * Copyright (c) 2014-2018 Pavel Pisa
+ * Modifications by OpenSynergy GmbH. Copyright (c) 2023 OpenSynergy GmbH
  *
  * Initial development supported by Google GSoC 2013 from RTEMS project slot
  *
@@ -39,6 +40,7 @@
 #include <sys/ioctl.h>
 #include <net/if.h>
 #include <linux/can.h>
+#include <linux/can/error.h>
 #include <linux/can/raw.h>
 #include "qom/object.h"
 
@@ -69,6 +71,7 @@ struct CanHostSocketCAN {
 QEMU_BUILD_BUG_ON(QEMU_CAN_EFF_FLAG != CAN_EFF_FLAG);
 QEMU_BUILD_BUG_ON(QEMU_CAN_RTR_FLAG != CAN_RTR_FLAG);
 QEMU_BUILD_BUG_ON(QEMU_CAN_ERR_FLAG != CAN_ERR_FLAG);
+QEMU_BUILD_BUG_ON(QEMU_CAN_ERR_BUSOFF != CAN_ERR_BUSOFF);
 QEMU_BUILD_BUG_ON(QEMU_CAN_INV_FILTER != CAN_INV_FILTER);
 QEMU_BUILD_BUG_ON(offsetof(qemu_can_frame, data)
                   != offsetof(struct can_frame, data));

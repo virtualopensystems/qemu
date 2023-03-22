@@ -56,6 +56,7 @@
 #define VIRTIO_ID_PMEM			27 /* virtio pmem */
 #define VIRTIO_ID_RPMB			28 /* virtio rpmb */
 #define VIRTIO_ID_MAC80211_HWSIM	29 /* virtio mac80211-hwsim */
+#define VIRTIO_ID_CAN                  36 /* virtio can */
 #define VIRTIO_ID_VIDEO_ENCODER		30 /* virtio video encoder */
 #define VIRTIO_ID_VIDEO_DECODER		31 /* virtio video decoder */
 #define VIRTIO_ID_SCMI			32 /* virtio SCMI */
