@@ -170,3 +170,8 @@ config CAN_VIRTIO_PCI
     default y if PCI_DEVICES
     depends on PCI && CAN_VIRTIO
     select CAN_BUS
+
+config VHOST_USER_CAN
+    bool
+    default y
+    depends on VIRTIO && VHOST_USER

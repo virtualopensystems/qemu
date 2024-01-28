@@ -6,5 +6,8 @@ system_ss.add(when: 'CONFIG_CAN_CTUCANFD', if_true: files('ctucan_core.c'))
 system_ss.add(when: 'CONFIG_CAN_CTUCANFD_PCI', if_true: files('ctucan_pci.c'))
 system_ss.add(when: 'CONFIG_CAN_VIRTIO', if_true: files('can_virtio.c'))
 system_ss.add(when: 'CONFIG_CAN_VIRTIO_PCI', if_true: files('can_virtio_pci.c'))
+system_ss.add(when: 'CONFIG_VHOST_USER_CAN', if_true: files('vhost-user-can.c'))
+system_ss.add(when: ['CONFIG_VIRTIO_PCI', 'CONFIG_VHOST_USER_CAN'],
+                      if_true: files('vhost-user-can-pci.c'))
 system_ss.add(when: 'CONFIG_XLNX_ZYNQMP', if_true: files('xlnx-zynqmp-can.c'))
 system_ss.add(when: 'CONFIG_XLNX_VERSAL', if_true: files('xlnx-versal-canfd.c'))
